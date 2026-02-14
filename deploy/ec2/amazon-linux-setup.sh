@@ -4,6 +4,119 @@ set -e
 echo "🚀 Setting up Autonomous Claude Agent on Amazon Linux..."
 echo ""
 
+# ============================================
+# System Requirements Check
+# ============================================
+echo "🔍 Checking system requirements..."
+echo ""
+
+# Check if running on Amazon Linux
+if [ -f /etc/os-release ]; then
+    . /etc/os-release
+    if [[ "$ID" != "amzn" ]]; then
+        echo "⚠️  WARNING: This script is designed for Amazon Linux"
+        echo "   Detected: $PRETTY_NAME"
+        read -p "Continue anyway? (y/N): " -n 1 -r
+        echo
+        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+            echo "Installation cancelled."
+            exit 1
+        fi
+    else
+        echo "✅ Amazon Linux detected: $PRETTY_NAME"
+    fi
+fi
+
+# Check available disk space (need at least 20GB, recommend 40GB)
+AVAILABLE_SPACE=$(df / | tail -1 | awk '{print $4}')
+AVAILABLE_GB=$((AVAILABLE_SPACE / 1024 / 1024))
+
+echo "💾 Available disk space: ${AVAILABLE_GB}GB"
+
+if [ $AVAILABLE_GB -lt 20 ]; then
+    echo "❌ ERROR: Insufficient disk space!"
+    echo "   Required: At least 20GB (40GB recommended)"
+    echo "   Available: ${AVAILABLE_GB}GB"
+    echo ""
+    echo "Please increase your EC2 volume size:"
+    echo "1. Stop the instance"
+    echo "2. Modify volume size (recommend 40GB)"
+    echo "3. Restart and run this script again"
+    exit 1
+elif [ $AVAILABLE_GB -lt 40 ]; then
+    echo "⚠️  WARNING: Disk space is less than recommended"
+    echo "   Available: ${AVAILABLE_GB}GB (Recommended: 40GB)"
+    echo "   The agent may run out of space over time"
+    read -p "Continue anyway? (y/N): " -n 1 -r
+    echo
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        echo "Installation cancelled."
+        exit 1
+    fi
+else
+    echo "✅ Sufficient disk space: ${AVAILABLE_GB}GB"
+fi
+
+# Check available RAM (need at least 2GB, recommend 4GB)
+TOTAL_RAM=$(free -g | grep Mem | awk '{print $2}')
+
+echo "🧠 Total RAM: ${TOTAL_RAM}GB"
+
+if [ $TOTAL_RAM -lt 2 ]; then
+    echo "❌ ERROR: Insufficient RAM!"
+    echo "   Required: At least 2GB (4GB recommended)"
+    echo "   Available: ${TOTAL_RAM}GB"
+    echo ""
+    echo "Please use a larger EC2 instance type (t3.small or larger)"
+    exit 1
+elif [ $TOTAL_RAM -lt 4 ]; then
+    echo "⚠️  WARNING: RAM is less than recommended"
+    echo "   Available: ${TOTAL_RAM}GB (Recommended: 4GB)"
+    echo "   Agent performance may be limited"
+    read -p "Continue anyway? (y/N): " -n 1 -r
+    echo
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        echo "Installation cancelled."
+        exit 1
+    fi
+else
+    echo "✅ Sufficient RAM: ${TOTAL_RAM}GB"
+fi
+
+# Check CPU cores (1 core minimum, 2+ recommended)
+CPU_CORES=$(nproc)
+
+echo "⚡ CPU cores: ${CPU_CORES}"
+
+if [ $CPU_CORES -lt 1 ]; then
+    echo "❌ ERROR: No CPU cores detected!"
+    exit 1
+elif [ $CPU_CORES -lt 2 ]; then
+    echo "⚠️  WARNING: Only 1 CPU core detected"
+    echo "   Recommended: 2+ cores for better performance"
+    read -p "Continue anyway? (y/N): " -n 1 -r
+    echo
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        echo "Installation cancelled."
+        exit 1
+    fi
+else
+    echo "✅ Sufficient CPU: ${CPU_CORES} cores"
+fi
+
+echo ""
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "System Requirements Summary:"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "  Disk Space: ${AVAILABLE_GB}GB (Minimum: 20GB, Recommended: 40GB)"
+echo "  RAM: ${TOTAL_RAM}GB (Minimum: 2GB, Recommended: 4GB)"
+echo "  CPU Cores: ${CPU_CORES} (Minimum: 1, Recommended: 2+)"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo ""
+echo "✅ All system requirements met! Proceeding with installation..."
+echo ""
+sleep 2
+
 # Update system
 echo "📦 Updating system packages..."
 sudo yum update -y
