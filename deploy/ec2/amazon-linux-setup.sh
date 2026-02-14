@@ -4,6 +4,16 @@ set -e
 echo "🚀 Setting up Autonomous Claude Agent on Amazon Linux..."
 echo ""
 
+# Detect if running interactively or piped (e.g., curl | bash)
+if [ -t 0 ]; then
+    INTERACTIVE=true
+    echo "📝 Running in interactive mode"
+else
+    INTERACTIVE=false
+    echo "📝 Running in non-interactive mode (warnings will be auto-accepted)"
+fi
+echo ""
+
 # ============================================
 # System Requirements Check
 # ============================================
@@ -16,11 +26,15 @@ if [ -f /etc/os-release ]; then
     if [[ "$ID" != "amzn" ]]; then
         echo "⚠️  WARNING: This script is designed for Amazon Linux"
         echo "   Detected: $PRETTY_NAME"
-        read -p "Continue anyway? (y/N): " -n 1 -r
-        echo
-        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-            echo "Installation cancelled."
-            exit 1
+        if [ "$INTERACTIVE" = true ]; then
+            read -p "Continue anyway? (y/N): " -n 1 -r
+            echo
+            if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+                echo "Installation cancelled."
+                exit 1
+            fi
+        else
+            echo "   (Auto-accepting in non-interactive mode)"
         fi
     else
         echo "✅ Amazon Linux detected: $PRETTY_NAME"
@@ -47,11 +61,15 @@ elif [ $AVAILABLE_GB -lt 40 ]; then
     echo "⚠️  WARNING: Disk space is less than recommended"
     echo "   Available: ${AVAILABLE_GB}GB (Recommended: 40GB)"
     echo "   The agent may run out of space over time"
-    read -p "Continue anyway? (y/N): " -n 1 -r
-    echo
-    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-        echo "Installation cancelled."
-        exit 1
+    if [ "$INTERACTIVE" = true ]; then
+        read -p "Continue anyway? (y/N): " -n 1 -r
+        echo
+        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+            echo "Installation cancelled."
+            exit 1
+        fi
+    else
+        echo "   (Auto-accepting in non-interactive mode)"
     fi
 else
     echo "✅ Sufficient disk space: ${AVAILABLE_GB}GB"
@@ -76,11 +94,15 @@ elif [ $TOTAL_RAM_MB -lt 4096 ]; then
     echo "⚠️  WARNING: RAM is less than recommended"
     echo "   Available: ${TOTAL_RAM_GB}GB (Recommended: 4GB)"
     echo "   Agent performance may be limited"
-    read -p "Continue anyway? (y/N): " -n 1 -r
-    echo
-    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-        echo "Installation cancelled."
-        exit 1
+    if [ "$INTERACTIVE" = true ]; then
+        read -p "Continue anyway? (y/N): " -n 1 -r
+        echo
+        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+            echo "Installation cancelled."
+            exit 1
+        fi
+    else
+        echo "   (Auto-accepting in non-interactive mode)"
     fi
 else
     echo "✅ Sufficient RAM: ${TOTAL_RAM_GB}GB"
@@ -97,11 +119,15 @@ if [ $CPU_CORES -lt 1 ]; then
 elif [ $CPU_CORES -lt 2 ]; then
     echo "⚠️  WARNING: Only 1 CPU core detected"
     echo "   Recommended: 2+ cores for better performance"
-    read -p "Continue anyway? (y/N): " -n 1 -r
-    echo
-    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-        echo "Installation cancelled."
-        exit 1
+    if [ "$INTERACTIVE" = true ]; then
+        read -p "Continue anyway? (y/N): " -n 1 -r
+        echo
+        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+            echo "Installation cancelled."
+            exit 1
+        fi
+    else
+        echo "   (Auto-accepting in non-interactive mode)"
     fi
 else
     echo "✅ Sufficient CPU: ${CPU_CORES} cores"
