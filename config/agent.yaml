@@ -1,0 +1,56 @@
+agent:
+  name: "AutonomousCodeBuilder"
+  version: "1.0.0"
+
+  execution:
+    max_iterations: 50
+    timeout_seconds: 300
+    retry_attempts: 3
+
+  models:
+    default: "claude-opus-4-6"
+    subagent: "claude-sonnet-4-5"
+
+  safety:
+    max_file_size_mb: 10
+    allowed_commands:
+      - npm
+      - pip
+      - git
+      - python
+      - pytest
+      - node
+      - bash
+    blocked_commands:
+      - rm -rf /
+      - sudo rm
+      - format
+      - mkfs
+
+brain:
+  vector_db:
+    type: "chromadb"
+    collection_name: "agent_memory"
+    embedding_model: "all-MiniLM-L6-v2"
+
+  memory:
+    max_context_tokens: 180000
+    auto_summarize: true
+    retention_days: 90
+
+tools:
+  enabled:
+    - bash
+    - file
+    - web
+
+monitoring:
+  telegram:
+    enabled: true
+    send_progress_updates: true
+    send_errors: true
+
+  dashboard:
+    enabled: true
+    host: "0.0.0.0"
+    port: 18789
