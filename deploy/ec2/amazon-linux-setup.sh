@@ -12,9 +12,17 @@ sudo yum update -y
 echo "🐍 Installing Python 3.11 and browser tools..."
 sudo yum install python3.11 python3.11-pip git -y
 
-echo "🌐 Installing browser tools (w3m, chromium)..."
-# Install w3m and curl (always available)
-sudo yum install w3m curl -y
+echo "🌐 Installing browser tools (w3m)..."
+# Install w3m (always available)
+sudo yum install w3m -y
+
+# Check if curl is available (curl-minimal is fine, don't replace it)
+if ! command -v curl &> /dev/null; then
+    echo "Installing curl..."
+    sudo yum install curl -y
+else
+    echo "✅ curl already available (curl-minimal)"
+fi
 
 # Try to install chromium (may not be available on all Amazon Linux versions)
 if sudo yum install chromium -y 2>/dev/null; then
