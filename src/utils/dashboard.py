@@ -74,13 +74,23 @@ class Dashboard:
         if len(self.logs) > self.max_logs:
             self.logs = self.logs[-self.max_logs:]
 
+    def set_telegram_chat(self, telegram_chat):
+        """Set Telegram chat handler for webhook endpoint.
+
+        Args:
+            telegram_chat: TelegramChat instance
+        """
+        self.telegram_chat = telegram_chat
+        logger.info("Telegram chat handler registered with dashboard")
+
     async def start(self):
         """Start dashboard server."""
         if not self.enabled:
             logger.warning("Dashboard not enabled")
             return
 
-        app = self.FastAPI(title="Autonomous Agent Dashboard")
+        from fastapi import FastAPI, Request
+        app = FastAPI(title="Autonomous Agent Dashboard")
 
         @app.get("/", response_class=self.HTMLResponse)
         async def root():
@@ -102,6 +112,26 @@ class Dashboard:
             """Health check endpoint."""
             return {"status": "healthy", "timestamp": datetime.now().isoformat()}
 
+        @app.post("/telegram/webhook")
+        async def telegram_webhook(request: Request):
+            """Handle Telegram webhook."""
+            if not hasattr(self, 'telegram_chat') or not self.telegram_chat:
+                logger.warning("Telegram webhook called but chat handler not set")
+                return {"ok": False, "error": "Chat handler not configured"}
+
+            try:
+                # Get update data
+                update_data = await request.json()
+                logger.debug(f"Received Telegram webhook: {update_data}")
+
+                # Handle with TelegramChat
+                result = await self.telegram_chat.handle_webhook(update_data)
+                return result
+
+            except Exception as e:
+                logger.error(f"Error in Telegram webhook: {e}", exc_info=True)
+                return {"ok": False, "error": str(e)}
+
         # Run server
         config = self.uvicorn.Config(
             app,
@@ -112,6 +142,7 @@ class Dashboard:
         server = self.uvicorn.Server(config)
 
         logger.info(f"Starting dashboard server on http://{self.host}:{self.port}")
+        logger.info(f"Telegram webhook endpoint: http://{self.host}:{self.port}/telegram/webhook")
         await server.serve()
 
     def _get_dashboard_html(self) -> str:

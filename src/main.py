@@ -4,6 +4,7 @@ import asyncio
 import logging
 import sys
 from pathlib import Path
+from datetime import datetime
 
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -18,6 +19,7 @@ from src.core.spawner.agent_factory import AgentFactory
 from src.core.spawner.orchestrator import Orchestrator
 from src.integrations.anthropic_client import AnthropicClient
 from src.utils.telegram_notifier import TelegramNotifier, TelegramCommandHandler
+from src.utils.telegram_chat import TelegramChat
 from src.utils.dashboard import Dashboard
 from src.utils.auto_updater import AutoUpdater
 
@@ -66,6 +68,7 @@ async def main():
         # Initialize agent
         logger.info("🤖 Initializing autonomous agent...")
         agent = AutonomousAgent(config, brain)
+        agent.start_time = datetime.now()  # Track start time for uptime
 
         # Initialize sub-agent spawner
         api_client = AnthropicClient(config.api_key)
@@ -116,15 +119,55 @@ async def main():
             logger.info("   - Use orchestrator to spawn multiple sub-agents")
             logger.info("   - Monitor via Telegram commands or web dashboard")
 
+        # Initialize Telegram chat with webhooks
+        telegram_chat = None
+        if telegram.enabled and config.telegram_bot_token and config.telegram_chat_id:
+            # Get EC2 public IP for webhook URL
+            import subprocess
+            try:
+                public_ip = subprocess.check_output(
+                    ["curl", "-s", "ifconfig.me"],
+                    timeout=5
+                ).decode().strip()
+                webhook_url = f"http://{public_ip}:{config.dashboard_port}/telegram/webhook"
+            except:
+                webhook_url = None
+                logger.warning("Could not determine public IP for webhook")
+
+            telegram_chat = TelegramChat(
+                bot_token=config.telegram_bot_token,
+                chat_id=config.telegram_chat_id,
+                anthropic_client=api_client,
+                agent=agent,
+                webhook_url=webhook_url
+            )
+
+            # Register chat handler with dashboard
+            if dashboard.enabled:
+                dashboard.set_telegram_chat(telegram_chat)
+
+            logger.info("💬 Telegram chat interface initialized (webhook mode)")
+
         # Start dashboard server (non-blocking)
+        dashboard_task = None
         if config.dashboard_enabled and dashboard.enabled:
             logger.info(f"\n🌐 Dashboard available at: http://0.0.0.0:{config.dashboard_port}")
-            logger.info("   (Will start when agent runs)")
+            dashboard_task = asyncio.create_task(dashboard.start())
+            logger.info("   Starting dashboard server...")
+
+            # Setup webhook after dashboard starts
+            if telegram_chat and telegram_chat.webhook_url:
+                await asyncio.sleep(2)  # Give dashboard time to start
+                await telegram_chat.setup_webhook()
 
         # Show Telegram info
         if telegram.enabled:
             logger.info(f"\n📱 Telegram notifications enabled")
-            logger.info("   Send /start to your bot to interact")
+            if telegram_chat:
+                logger.info("   💬 Chat interface: ACTIVE (webhooks)")
+                logger.info("   Send a message to your bot to start chatting!")
+            else:
+                logger.info("   Send /start to your bot to interact")
 
         # Show auto-update info
         if auto_updater.enabled:
@@ -150,6 +193,8 @@ async def main():
             logger.info("\n👋 Shutting down gracefully...")
             if auto_update_task:
                 auto_update_task.cancel()
+            if dashboard_task:
+                dashboard_task.cancel()
             await telegram.notify("Agent shutting down", level="warning")
 
     except Exception as e:
