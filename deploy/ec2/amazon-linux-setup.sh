@@ -174,8 +174,16 @@ source venv/bin/activate
 
 # Install dependencies
 echo "📦 Installing Python dependencies..."
+
+# Set TMPDIR to use main disk instead of tmpfs /tmp (which is often <1GB)
+export TMPDIR=~/tmp_pip
+mkdir -p $TMPDIR
+
 pip install --upgrade pip
 pip install -r requirements.txt
+
+# Clean up temporary directory
+rm -rf $TMPDIR
 
 # Configure limited sudo access
 echo "🔐 Configuring limited sudo access for agent..."
