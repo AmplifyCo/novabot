@@ -13,7 +13,7 @@ class LocalModelClient:
 
     def __init__(
         self,
-        model_name: str = "mistralai/Mistral-7B-Instruct-v0.3",
+        model_name: str = "HuggingFaceTB/SmolLM2-1.7B-Instruct",
         endpoint: Optional[str] = None,
         max_tokens: int = 512,
         temperature: float = 0.7
@@ -21,7 +21,7 @@ class LocalModelClient:
         """Initialize local model client.
 
         Args:
-            model_name: Hugging Face model name
+            model_name: Hugging Face model name (SmolLM2 optimized for CPU)
             endpoint: Local inference server endpoint (e.g., http://localhost:8000)
             max_tokens: Maximum tokens to generate
             temperature: Sampling temperature

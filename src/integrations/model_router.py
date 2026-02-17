@@ -2,6 +2,8 @@
 
 PRIORITY: Clarity and quality over cost savings.
 Only use lightweight models for simple, unambiguous tasks.
+
+FALLBACK: If Claude API fails, automatically fall back to SmolLM2 local model.
 """
 
 import logging
@@ -9,6 +11,13 @@ from typing import Optional, Dict, Any, List
 from enum import Enum
 
 logger = logging.getLogger(__name__)
+
+
+class APIFailureMode(Enum):
+    """API failure handling modes."""
+    FAIL_FAST = "fail_fast"           # Raise error immediately
+    FALLBACK_LOCAL = "fallback_local"  # Fall back to local model
+    RETRY_THEN_FALLBACK = "retry_then_fallback"  # Retry, then fall back
 
 
 class ModelTier(Enum):
@@ -263,3 +272,67 @@ class ModelRouter:
                 return info[key]
 
         return {"tier": "unknown", "cost": "unknown", "quality": "unknown"}
+
+    def get_fallback_model(self) -> Optional[str]:
+        """Get fallback model when Claude API fails.
+
+        Returns:
+            Local model name if enabled, None otherwise
+        """
+        if self.config.local_model_enabled:
+            logger.info(f"Using fallback model: {self.config.local_model_name}")
+            return "local"  # Special identifier for local model
+        return None
+
+    def should_use_fallback(self, error: Exception) -> bool:
+        """Determine if we should fall back to local model.
+
+        Args:
+            error: The exception that occurred
+
+        Returns:
+            True if should use fallback
+        """
+        # Rate limit errors (429)
+        if "429" in str(error) or "rate" in str(error).lower():
+            logger.warning(f"Rate limit error detected: {error}")
+            return True
+
+        # API errors (500, 503, etc.)
+        if "500" in str(error) or "503" in str(error) or "api" in str(error).lower():
+            logger.warning(f"API error detected: {error}")
+            return True
+
+        # Connection errors
+        if "connection" in str(error).lower() or "timeout" in str(error).lower():
+            logger.warning(f"Connection error detected: {error}")
+            return True
+
+        return False
+
+    def get_fallback_message(self, original_task: str, error: Exception) -> str:
+        """Generate fallback message when using local model.
+
+        Args:
+            original_task: The original task that failed
+            error: The error that occurred
+
+        Returns:
+            User-friendly fallback message
+        """
+        error_type = "API error"
+        if "429" in str(error):
+            error_type = "Rate limit"
+        elif "timeout" in str(error).lower():
+            error_type = "Timeout"
+        elif "connection" in str(error).lower():
+            error_type = "Connection issue"
+
+        return f"""⚠️ **{error_type}** - Using local model (SmolLM2)
+
+The Claude API is temporarily unavailable. I'm using my local backup model to assist you.
+
+**Note:** Responses may be simpler than usual. For complex tasks, please try again in a few moments when the main API is available.
+
+---
+"""

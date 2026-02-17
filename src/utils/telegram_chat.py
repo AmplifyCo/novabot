@@ -128,6 +128,7 @@ class TelegramChat:
 
         Philosophy: Prioritize CLARITY and QUALITY over cost.
         Use router to select appropriate model based on task complexity.
+        FALLBACK: If Claude API fails, automatically fall back to SmolLM2.
 
         Args:
             message: User message
@@ -136,8 +137,28 @@ class TelegramChat:
             # Send typing indicator
             await self.send_message("🤔 Processing...")
 
+            # Try primary processing with Claude API
+            response = await self._process_with_fallback(message)
+
+            # Send response
+            await self.send_message(response)
+
+        except Exception as e:
+            logger.error(f"Error processing message: {e}", exc_info=True)
+            await self.send_message(f"❌ Error: {str(e)}")
+
+    async def _process_with_fallback(self, message: str) -> str:
+        """Process message with automatic fallback to local model.
+
+        Args:
+            message: User message
+
+        Returns:
+            Response string
+        """
+        try:
             # Parse user intent using appropriate model
-            intent = await self._parse_intent(message)
+            intent = await self._parse_intent_with_fallback(message)
 
             # Use router to determine best model for this task
             selected_model = self.router.select_model_for_task(
@@ -149,36 +170,100 @@ class TelegramChat:
             logger.info(f"Intent: {intent.get('action')} (confidence: {intent.get('confidence'):.2f})")
             logger.info(f"Selected model: {selected_model}")
 
-            # Route based on intent and selected model
-            if intent.get("action") == "build_feature":
-                # Always use Opus architect for building
-                logger.info(f"Building feature with Opus architect")
-                response = await self.agent.run(
-                    task=f"User request via Telegram: {message}",
-                    max_iterations=30,  # More iterations for complex builds
-                    system_prompt=self._build_telegram_system_prompt()
-                )
-
-            elif intent.get("confidence", 0) < 0.6:
-                # Low confidence - use Opus for understanding
-                logger.info(f"Low confidence ({intent.get('confidence'):.2f}) - using Opus")
-                response = await self.agent.run(
-                    task=f"User request via Telegram: {message}",
-                    max_iterations=10,
-                    system_prompt=self._build_telegram_system_prompt()
-                )
-
-            else:
-                # Use intent-based handlers with appropriate model
-                logger.info(f"Using intent handler for: {intent.get('action')}")
-                response = await self._execute_intent(intent, message)
-
-            # Send response
-            await self.send_message(response)
+            # Try primary model first
+            return await self._execute_with_primary_model(intent, message)
 
         except Exception as e:
-            logger.error(f"Error processing message: {e}", exc_info=True)
-            await self.send_message(f"❌ Error: {str(e)}")
+            # Check if we should fall back to local model
+            if self.router.should_use_fallback(e):
+                logger.warning(f"Primary model failed, attempting fallback: {e}")
+                return await self._execute_with_fallback_model(message, e)
+            else:
+                # Not a fallback-able error, re-raise
+                raise
+
+    async def _execute_with_primary_model(self, intent: Dict[str, Any], message: str) -> str:
+        """Execute with primary Claude models.
+
+        Args:
+            intent: Parsed intent
+            message: User message
+
+        Returns:
+            Response string
+        """
+        # Route based on intent and selected model
+        if intent.get("action") == "build_feature":
+            # Always use Opus architect for building
+            logger.info(f"Building feature with Opus architect")
+            return await self.agent.run(
+                task=f"User request via Telegram: {message}",
+                max_iterations=30,  # More iterations for complex builds
+                system_prompt=self._build_telegram_system_prompt()
+            )
+
+        elif intent.get("confidence", 0) < 0.6:
+            # Low confidence - use Opus for understanding
+            logger.info(f"Low confidence ({intent.get('confidence'):.2f}) - using Opus")
+            return await self.agent.run(
+                task=f"User request via Telegram: {message}",
+                max_iterations=10,
+                system_prompt=self._build_telegram_system_prompt()
+            )
+
+        else:
+            # Use intent-based handlers with appropriate model
+            logger.info(f"Using intent handler for: {intent.get('action')}")
+            return await self._execute_intent(intent, message)
+
+    async def _execute_with_fallback_model(self, message: str, error: Exception) -> str:
+        """Execute with local fallback model (SmolLM2).
+
+        Args:
+            message: User message
+            error: The error that triggered fallback
+
+        Returns:
+            Response string with fallback warning
+        """
+        if not self.agent.config.local_model_enabled:
+            # No fallback available
+            raise error
+
+        logger.warning(f"Using local fallback model due to: {error}")
+
+        # Generate fallback warning message
+        warning = self.router.get_fallback_message(message, error)
+
+        try:
+            # Import local model client
+            from src.integrations.local_model_client import LocalModelClient
+
+            # Initialize local model
+            local_client = LocalModelClient(
+                model_name=self.agent.config.local_model_name,
+                endpoint=self.agent.config.local_model_endpoint
+            )
+
+            # Check if available
+            if not local_client.is_available():
+                logger.error("Local model not available")
+                return f"{warning}\n\n❌ Local backup model is not available. Please try again later."
+
+            # Generate response with local model
+            local_response = await local_client.create_message(
+                messages=[{"role": "user", "content": message}],
+                max_tokens=300,
+                system="You are a helpful autonomous AI agent. Respond concisely and clearly."
+            )
+
+            response_text = local_response["content"][0]["text"]
+
+            return f"{warning}\n{response_text}"
+
+        except Exception as fallback_error:
+            logger.error(f"Fallback model also failed: {fallback_error}")
+            return f"{warning}\n\n❌ Fallback model error: {str(fallback_error)}\n\nPlease try again later."
 
     def _build_telegram_system_prompt(self) -> str:
         """Build system prompt for Telegram interactions.
@@ -220,6 +305,47 @@ Response Guidelines:
 - Report results clearly
 - Refer to yourself as "I" or "the agent"
 - Focus on accomplishing the user's request"""
+
+    async def _parse_intent_with_fallback(self, message: str) -> Dict[str, Any]:
+        """Parse user intent with fallback support.
+
+        Args:
+            message: User message
+
+        Returns:
+            Intent dict
+        """
+        try:
+            return await self._parse_intent(message)
+        except Exception as e:
+            if self.router.should_use_fallback(e):
+                logger.warning(f"Intent parsing failed, using simple classification: {e}")
+                # Simple local intent classification
+                return self._parse_intent_locally(message)
+            raise
+
+    def _parse_intent_locally(self, message: str) -> Dict[str, Any]:
+        """Parse intent locally using simple keyword matching.
+
+        Args:
+            message: User message
+
+        Returns:
+            Intent dict with basic classification
+        """
+        msg_lower = message.lower()
+
+        # Simple keyword-based intent detection
+        if any(word in msg_lower for word in ["status", "running", "health"]):
+            return {"action": "status", "confidence": 0.9, "parameters": {}}
+        elif any(word in msg_lower for word in ["pull", "update", "git"]):
+            return {"action": "git_pull", "confidence": 0.9, "parameters": {}}
+        elif any(word in msg_lower for word in ["log", "logs"]):
+            return {"action": "logs", "confidence": 0.9, "parameters": {}}
+        elif any(word in msg_lower for word in ["build", "create", "implement"]):
+            return {"action": "build_feature", "confidence": 0.8, "parameters": {"feature_name": "requested feature"}}
+        else:
+            return {"action": "unknown", "confidence": 0.3, "parameters": {}}
 
     async def _parse_intent(self, message: str) -> Dict[str, Any]:
         """Parse user intent from message using Claude API.
