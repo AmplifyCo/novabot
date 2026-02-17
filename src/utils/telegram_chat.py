@@ -5,6 +5,13 @@ import logging
 import json
 from typing import Optional, Dict, Any
 from datetime import datetime
+import sys
+from pathlib import Path
+
+# Add parent directory to path for imports
+sys.path.append(str(Path(__file__).parent.parent.parent))
+
+from src.integrations.model_router import ModelRouter
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +42,10 @@ class TelegramChat:
         self.agent = agent
         self.webhook_url = webhook_url
         self.enabled = bool(bot_token and chat_id)
+
+        # Initialize intelligent model router
+        self.router = ModelRouter(agent.config)
+        logger.info("Initialized ModelRouter for intelligent model selection")
 
         if self.enabled:
             try:
@@ -113,7 +124,10 @@ class TelegramChat:
             return {"ok": False, "error": str(e)}
 
     async def _process_message(self, message: str):
-        """Process incoming message using Core Agent Engine.
+        """Process incoming message using intelligent model routing.
+
+        Philosophy: Prioritize CLARITY and QUALITY over cost.
+        Use router to select appropriate model based on task complexity.
 
         Args:
             message: User message
@@ -122,13 +136,42 @@ class TelegramChat:
             # Send typing indicator
             await self.send_message("🤔 Processing...")
 
-            # Use Core Agent Engine for autonomous execution
-            # The agent will use its tools and reasoning to handle the request
-            response = await self.agent.run(
-                task=f"User request via Telegram: {message}",
-                max_iterations=10,  # Limit iterations for chat responses
-                system_prompt=self._build_telegram_system_prompt()
+            # Parse user intent using appropriate model
+            intent = await self._parse_intent(message)
+
+            # Use router to determine best model for this task
+            selected_model = self.router.select_model_for_task(
+                task=message,
+                intent=intent.get("action"),
+                confidence=intent.get("confidence", 0)
             )
+
+            logger.info(f"Intent: {intent.get('action')} (confidence: {intent.get('confidence'):.2f})")
+            logger.info(f"Selected model: {selected_model}")
+
+            # Route based on intent and selected model
+            if intent.get("action") == "build_feature":
+                # Always use Opus architect for building
+                logger.info(f"Building feature with Opus architect")
+                response = await self.agent.run(
+                    task=f"User request via Telegram: {message}",
+                    max_iterations=30,  # More iterations for complex builds
+                    system_prompt=self._build_telegram_system_prompt()
+                )
+
+            elif intent.get("confidence", 0) < 0.6:
+                # Low confidence - use Opus for understanding
+                logger.info(f"Low confidence ({intent.get('confidence'):.2f}) - using Opus")
+                response = await self.agent.run(
+                    task=f"User request via Telegram: {message}",
+                    max_iterations=10,
+                    system_prompt=self._build_telegram_system_prompt()
+                )
+
+            else:
+                # Use intent-based handlers with appropriate model
+                logger.info(f"Using intent handler for: {intent.get('action')}")
+                response = await self._execute_intent(intent, message)
 
             # Send response
             await self.send_message(response)
@@ -215,8 +258,11 @@ For other actions, leave parameters empty.
 
 Respond only with valid JSON, no explanation."""
 
+            # Use router to select model for intent parsing
+            intent_model = self.router.select_model_for_intent_parsing()
+
             response = await self.anthropic_client.create_message(
-                model="claude-haiku-4-5",  # Use fast model for intent parsing
+                model=intent_model,
                 max_tokens=200,
                 messages=[{"role": "user", "content": prompt}]
             )
@@ -268,7 +314,7 @@ Respond only with valid JSON, no explanation."""
 
             elif action == "build_feature":
                 feature_name = params.get("feature_name", "unknown")
-                return await self._build_feature(feature_name)
+                return await self._build_feature(feature_name, original_message)
 
             elif action == "restart":
                 return await self._restart_agent()
@@ -362,9 +408,45 @@ Respond only with valid JSON, no explanation."""
         except Exception as e:
             return f"❌ Error: {str(e)}"
 
-    async def _build_feature(self, feature_name: str) -> str:
-        """Build a specific feature."""
-        return f"🔨 **Feature Building**\n\nRequested: {feature_name}\n\n⚠️ Meta-agent self-builder not yet implemented.\n\nThis feature will autonomously build requested components once the meta-agent is complete."
+    async def _build_feature(self, feature_name: str, original_message: str = "") -> str:
+        """Build a specific feature using Opus architect.
+
+        Args:
+            feature_name: Name of feature to build
+            original_message: Original user message for full context
+
+        Returns:
+            Build status message
+        """
+        try:
+            await self.send_message(f"🔨 **Building Feature: {feature_name}**\n\nActivating Opus architect and spawning Sonnet workers...")
+
+            # Use the full Opus architect for feature building
+            # This will spawn Sonnet sub-agents as needed
+            build_task = f"""Build feature: {feature_name}
+
+User's full request: {original_message}
+
+Instructions:
+1. Analyze what needs to be built
+2. Break down into sub-tasks
+3. Spawn Sonnet sub-agents for implementation
+4. Coordinate the work
+5. Report progress and results
+
+Use the orchestrator to spawn sub-agents efficiently."""
+
+            result = await self.agent.run(
+                task=build_task,
+                max_iterations=30,  # More iterations for feature building
+                system_prompt=self._build_telegram_system_prompt()
+            )
+
+            return f"✅ **Feature Build Complete**\n\n{result}"
+
+        except Exception as e:
+            logger.error(f"Error building feature: {e}")
+            return f"❌ Error building {feature_name}: {str(e)}"
 
     async def _restart_agent(self) -> str:
         """Restart the agent."""
@@ -432,15 +514,18 @@ Respond only with valid JSON, no explanation."""
             uptime = datetime.now() - self.agent.start_time if hasattr(self.agent, 'start_time') else None
             uptime_str = f"{uptime.seconds // 3600}h {(uptime.seconds % 3600) // 60}m" if uptime else "Unknown"
 
+            # Use router to select chat model (prioritizes quality)
+            chat_model = self.router.select_model_for_chat(len(message))
+
             # Use Claude with system message to act as the autonomous agent
             response = await self.anthropic_client.create_message(
-                model="claude-haiku-4-5",
-                max_tokens=200,
+                model=chat_model,
+                max_tokens=300,  # Increased for better responses
                 system=f"""You are an autonomous AI agent system deployed on AWS EC2, running 24/7 as a systemd service. Your purpose is to help your user manage tasks, monitor systems, and execute commands remotely via Telegram.
 
 Current Status:
 - Uptime: {uptime_str}
-- Model: {self.agent.config.model}
+- Model: {self.agent.config.default_model}
 - Location: EC2 instance (Amazon Linux)
 - Web Dashboard: Available via Cloudflare Tunnel
 
@@ -450,13 +535,15 @@ Your Capabilities:
 - Monitor logs
 - Execute tasks autonomously
 - Report on ongoing operations
+- Build features using multi-agent orchestration
 
 Response Guidelines:
-- Be helpful, concise (2-3 sentences), and friendly
+- Be helpful, clear, and professional
+- Provide detailed, informative responses (2-5 sentences)
 - Refer to yourself as "I" or "the agent"
 - Focus on your actual operational capabilities
-- Don't discuss your underlying model architecture
-- Help the user understand what you're doing and can do""",
+- Explain what you can do and how you can help
+- IMPORTANT: Prioritize clarity - give thoughtful, well-reasoned answers""",
                 messages=[{"role": "user", "content": message}]
             )
 

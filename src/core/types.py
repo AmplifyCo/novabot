@@ -33,8 +33,16 @@ class AgentConfig:
     """Configuration for the autonomous agent."""
     # API
     api_key: str
-    default_model: str = "claude-opus-4-6"
-    subagent_model: str = "claude-sonnet-4-5"
+    default_model: str = "claude-opus-4-6"  # Architect - complex planning
+    subagent_model: str = "claude-sonnet-4-5"  # Workers - implementation
+    chat_model: str = "claude-haiku-4-5"  # Chat - simple queries
+    intent_model: str = "claude-haiku-4-5"  # Intent parsing
+
+    # Local Models (optional, for CPU inference)
+    local_model_enabled: bool = False
+    local_model_name: str = "nvidia/personaplex-7b-v1"
+    local_model_endpoint: Optional[str] = None  # e.g., "http://localhost:8000"
+    local_model_for: str = "chat,intent"  # Comma-separated: chat, intent, simple_tasks
 
     # Execution
     max_iterations: int = 50

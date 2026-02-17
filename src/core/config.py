@@ -27,11 +27,22 @@ def load_config(env_file: str = ".env", config_file: str = "config/agent.yaml") 
             yaml_config = yaml.safe_load(f) or {}
 
     # Build config from environment (takes precedence) and YAML
+    models_config = yaml_config.get("agent", {}).get("models", {})
+    local_model_config = yaml_config.get("local_model", {})
+
     config = AgentConfig(
-        # API
+        # API - Multi-tier model configuration
         api_key=os.getenv("ANTHROPIC_API_KEY", ""),
-        default_model=os.getenv("DEFAULT_MODEL", yaml_config.get("agent", {}).get("models", {}).get("default", "claude-opus-4-6")),
-        subagent_model=os.getenv("SUBAGENT_MODEL", yaml_config.get("agent", {}).get("models", {}).get("subagent", "claude-sonnet-4-5")),
+        default_model=os.getenv("DEFAULT_MODEL", models_config.get("default", "claude-opus-4-6")),
+        subagent_model=os.getenv("SUBAGENT_MODEL", models_config.get("subagent", "claude-sonnet-4-5")),
+        chat_model=os.getenv("CHAT_MODEL", models_config.get("chat", "claude-haiku-4-5")),
+        intent_model=os.getenv("INTENT_MODEL", models_config.get("intent", "claude-haiku-4-5")),
+
+        # Local Models (optional)
+        local_model_enabled=os.getenv("LOCAL_MODEL_ENABLED", str(local_model_config.get("enabled", False))).lower() == "true",
+        local_model_name=os.getenv("LOCAL_MODEL_NAME", local_model_config.get("name", "nvidia/personaplex-7b-v1")),
+        local_model_endpoint=os.getenv("LOCAL_MODEL_ENDPOINT", local_model_config.get("endpoint")),
+        local_model_for=os.getenv("LOCAL_MODEL_FOR", local_model_config.get("use_for", "chat,intent")),
 
         # Execution
         max_iterations=int(os.getenv("MAX_ITERATIONS", yaml_config.get("agent", {}).get("execution", {}).get("max_iterations", 50))),

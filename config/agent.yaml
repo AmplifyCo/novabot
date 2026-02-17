@@ -8,8 +8,11 @@ agent:
     retry_attempts: 3
 
   models:
-    default: "claude-opus-4-6"
-    subagent: "claude-sonnet-4-5"
+    # Multi-tier model configuration
+    default: "claude-opus-4-6"      # Architect - complex planning & orchestration
+    subagent: "claude-sonnet-4-5"   # Workers - implementation tasks
+    chat: "claude-haiku-4-5"        # Chat - simple conversations
+    intent: "claude-haiku-4-5"      # Intent parsing - lightweight NLP
 
   safety:
     max_file_size_mb: 10
@@ -82,6 +85,19 @@ monitoring:
     enabled: true
     host: "0.0.0.0"
     port: 18789
+
+local_model:
+  # Local model configuration (optional, runs on CPU)
+  # Useful for simple tasks with no rate limits or costs
+  enabled: false  # Set to true to enable local model
+  name: "nvidia/personaplex-7b-v1"  # Hugging Face model
+  endpoint: null  # e.g., "http://localhost:8000" if using vLLM/Ollama server
+  use_for: "chat,intent"  # Comma-separated: chat, intent, simple_tasks
+
+  # Performance settings
+  max_tokens: 512
+  temperature: 0.7
+  device: "cpu"  # cpu or cuda
 
 auto_update:
   enabled: true
