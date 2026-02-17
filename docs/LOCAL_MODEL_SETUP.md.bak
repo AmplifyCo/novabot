@@ -51,7 +51,7 @@ INTENT_MODEL=claude-haiku-4-5          # Intent parsing
 
 # Optional: Local Model
 LOCAL_MODEL_ENABLED=false
-LOCAL_MODEL_NAME=mistralai/Mistral-7B-Instruct-v0.3
+LOCAL_MODEL_NAME=nvidia/personaplex-7b-v1
 LOCAL_MODEL_ENDPOINT=http://localhost:8000
 LOCAL_MODEL_FOR=trivial                # Very conservative
 ```
@@ -70,7 +70,7 @@ agent:
 
 local_model:
   enabled: false
-  name: "mistralai/Mistral-7B-Instruct-v0.3"
+  name: "nvidia/personaplex-7b-v1"
   endpoint: null
   use_for: "trivial"
   max_tokens: 512
@@ -90,7 +90,7 @@ pip install transformers torch
 
 # Enable in .env
 LOCAL_MODEL_ENABLED=true
-LOCAL_MODEL_NAME=mistralai/Mistral-7B-Instruct-v0.3
+LOCAL_MODEL_NAME=nvidia/personaplex-7b-v1
 LOCAL_MODEL_ENDPOINT=  # Leave empty for direct inference
 ```
 
@@ -107,14 +107,14 @@ pip install vllm
 
 # Start server
 python -m vllm.entrypoints.openai.api_server \
-  --model mistralai/Mistral-7B-Instruct-v0.3 \
+  --model nvidia/personaplex-7b-v1 \
   --host 0.0.0.0 \
   --port 8000 \
   --dtype float32
 
 # Update .env
 LOCAL_MODEL_ENABLED=true
-LOCAL_MODEL_NAME=mistralai/Mistral-7B-Instruct-v0.3
+LOCAL_MODEL_NAME=nvidia/personaplex-7b-v1
 LOCAL_MODEL_ENDPOINT=http://localhost:8000
 ```
 
@@ -147,7 +147,7 @@ LOCAL_MODEL_ENDPOINT=http://localhost:11434
 
 ### For Chat/Intent (Small, Fast)
 
-- **mistralai/Mistral-7B-Instruct-v0.3** (7B) - Good for conversation
+- **nvidia/personaplex-7b-v1** (7B) - Good for conversation
 - **mistral-7b-instruct** (7B) - General purpose
 - **phi-3-mini** (3.8B) - Very lightweight
 
@@ -234,7 +234,7 @@ LOCAL_MODEL_FOR=trivial,simple
 pip install --upgrade transformers torch
 
 # Test model load
-python -c "from transformers import AutoTokenizer; AutoTokenizer.from_pretrained('mistralai/Mistral-7B-Instruct-v0.3')"
+python -c "from transformers import AutoTokenizer; AutoTokenizer.from_pretrained('nvidia/personaplex-7b-v1')"
 ```
 
 ### vLLM Server Issues

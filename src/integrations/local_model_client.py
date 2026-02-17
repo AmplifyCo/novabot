@@ -13,7 +13,7 @@ class LocalModelClient:
 
     def __init__(
         self,
-        model_name: str = "nvidia/personaplex-7b-v1",
+        model_name: str = "mistralai/Mistral-7B-Instruct-v0.3",
         endpoint: Optional[str] = None,
         max_tokens: int = 512,
         temperature: float = 0.7

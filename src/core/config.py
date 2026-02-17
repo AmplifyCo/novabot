@@ -40,7 +40,7 @@ def load_config(env_file: str = ".env", config_file: str = "config/agent.yaml") 
 
         # Local Models (optional)
         local_model_enabled=os.getenv("LOCAL_MODEL_ENABLED", str(local_model_config.get("enabled", False))).lower() == "true",
-        local_model_name=os.getenv("LOCAL_MODEL_NAME", local_model_config.get("name", "nvidia/personaplex-7b-v1")),
+        local_model_name=os.getenv("LOCAL_MODEL_NAME", local_model_config.get("name", "mistralai/Mistral-7B-Instruct-v0.3")),
         local_model_endpoint=os.getenv("LOCAL_MODEL_ENDPOINT", local_model_config.get("endpoint")),
         local_model_for=os.getenv("LOCAL_MODEL_FOR", local_model_config.get("use_for", "chat,intent")),
 

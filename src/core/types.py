@@ -40,7 +40,7 @@ class AgentConfig:
 
     # Local Models (optional, for CPU inference)
     local_model_enabled: bool = False
-    local_model_name: str = "nvidia/personaplex-7b-v1"
+    local_model_name: str = "mistralai/Mistral-7B-Instruct-v0.3"  # Text-based LLM for chat
     local_model_endpoint: Optional[str] = None  # e.g., "http://localhost:8000"
     local_model_for: str = "chat,intent"  # Comma-separated: chat, intent, simple_tasks
 

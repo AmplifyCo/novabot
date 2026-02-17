@@ -90,7 +90,8 @@ local_model:
   # Local model configuration (optional, runs on CPU)
   # Useful for simple tasks with no rate limits or costs
   enabled: false  # Set to true to enable local model
-  name: "nvidia/personaplex-7b-v1"  # Hugging Face model
+  name: "mistralai/Mistral-7B-Instruct-v0.3"  # Text-based chat LLM
+  # Alternatives: meta-llama/Llama-3.2-3B-Instruct, microsoft/Phi-3-mini-4k-instruct
   endpoint: null  # e.g., "http://localhost:8000" if using vLLM/Ollama server
   use_for: "chat,intent"  # Comma-separated: chat, intent, simple_tasks
 
