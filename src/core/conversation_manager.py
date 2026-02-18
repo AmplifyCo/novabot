@@ -227,7 +227,7 @@ class ConversationManager:
             return await self.agent.run(
                 task=f"User request: {message}",
                 max_iterations=30,
-                system_prompt=self._build_system_prompt()
+                system_prompt=await self._build_system_prompt(message)
             )
 
         elif action in ["status", "git_pull", "git_update", "restart", "health", "logs"]:
@@ -246,7 +246,7 @@ class ConversationManager:
                 return await self.agent.run(
                     task=f"User request: {message}",
                     max_iterations=30,  # Increased from 10 to handle complex build tasks
-                    system_prompt=self._build_system_prompt()
+                    system_prompt=await self._build_system_prompt(message)
                 )
             else:
                 # Question: "What's X?", "How does Y work?" → Use chat with Brain context
@@ -346,7 +346,7 @@ Capabilities:
             return f"{warning}\n\n❌ Fallback error: {str(fallback_error)}"
 
     async def _chat(self, message: str) -> str:
-        """Have a conversation.
+        """Have a conversation with Brain context.
 
         Args:
             message: User message
@@ -355,13 +355,36 @@ Capabilities:
             Response
         """
         try:
-            # Get context from Brain if available
+            # Build comprehensive context from Brain
             system_prompt = "You are a helpful AI assistant. Be concise and clear."
 
-            if self.brain and hasattr(self.brain, 'get_relevant_context'):
-                context = await self.brain.get_relevant_context(message, max_results=3)
-                if context:
-                    system_prompt += f"\n\n{context}"
+            brain_context_parts = []
+
+            if self.brain:
+                # Get relevant knowledge from Brain
+                if hasattr(self.brain, 'get_relevant_context'):
+                    try:
+                        context = await self.brain.get_relevant_context(message, max_results=5)
+                        if context:
+                            brain_context_parts.append(context)
+                    except Exception as e:
+                        logger.debug(f"Could not get relevant context: {e}")
+
+                # Get conversation history for continuity
+                if hasattr(self.brain, 'get_conversation_context'):
+                    try:
+                        conv_context = await self.brain.get_conversation_context(
+                            current_message=message,
+                            limit=3
+                        )
+                        if conv_context:
+                            brain_context_parts.append(conv_context)
+                    except Exception as e:
+                        logger.debug(f"Could not get conversation context: {e}")
+
+            # Add Brain context to system prompt
+            if brain_context_parts:
+                system_prompt += "\n\n" + "\n\n".join(brain_context_parts)
 
             chat_model = self.router.select_model_for_chat(len(message))
 
@@ -527,16 +550,19 @@ Return ONLY ONE WORD: build_feature, status, question, or action"""
         # Ambiguous - default to chat (safer, faster)
         return False
 
-    def _build_system_prompt(self) -> str:
-        """Build system prompt for agent tasks.
+    async def _build_system_prompt(self, query: str = "") -> str:
+        """Build system prompt for agent tasks with Brain context.
+
+        Args:
+            query: Current query for context retrieval
 
         Returns:
-            System prompt string
+            System prompt string with Brain context
         """
         uptime = datetime.now() - self.agent.start_time if hasattr(self.agent, 'start_time') else None
         uptime_str = f"{uptime.seconds // 3600}h {(uptime.seconds % 3600) // 60}m" if uptime else "Unknown"
 
-        return f"""You are an autonomous AI agent system.
+        base_prompt = f"""You are an autonomous AI agent system.
 
 Current Status:
 - Uptime: {uptime_str}
@@ -547,3 +573,27 @@ Guidelines:
 - Use tools to get factual information
 - NEVER hallucinate or make up information
 - If you don't know, say so clearly"""
+
+        # ADD BRAIN CONTEXT for continuity and knowledge
+        brain_context = ""
+        if self.brain:
+            try:
+                # Get relevant context from CoreBrain
+                if hasattr(self.brain, 'get_relevant_context') and query:
+                    context = await self.brain.get_relevant_context(query, max_results=5)
+                    if context:
+                        brain_context += f"\n\n{context}"
+
+                # Get recent conversation context
+                if hasattr(self.brain, 'get_conversation_context'):
+                    conv_context = await self.brain.get_conversation_context(
+                        current_message=query,
+                        limit=3
+                    )
+                    if conv_context:
+                        brain_context += f"\n\n{conv_context}"
+
+            except Exception as e:
+                logger.debug(f"Could not retrieve Brain context: {e}")
+
+        return base_prompt + brain_context
