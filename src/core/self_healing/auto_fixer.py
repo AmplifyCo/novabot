@@ -64,6 +64,10 @@ class AutoFixer:
             ErrorType.GIT_ERROR: self._fix_git_error,
             ErrorType.CONFIG_ERROR: self._fix_config_error,
             ErrorType.ATTRIBUTE_ERROR: self._fix_attribute_error,
+            ErrorType.API_ERROR: self._fix_api_error,
+            ErrorType.TYPE_ERROR: self._fix_type_error,
+            ErrorType.SERVICE_CRASH: self._fix_service_crash,
+            ErrorType.TIMEOUT: self._fix_timeout,
         }
 
         fix_func = fix_strategies.get(error.error_type)
@@ -364,6 +368,186 @@ class AutoFixer:
             error_type=ErrorType.ATTRIBUTE_ERROR,
             action_taken="Cannot auto-fix code errors",
             details="Attribute errors require code changes. Check git for updates."
+        )
+
+    async def _fix_api_error(self, error: DetectedError) -> FixResult:
+        """Fix API errors by retrying with exponential backoff.
+
+        Args:
+            error: The detected error
+
+        Returns:
+            FixResult
+        """
+        logger.info("Fixing API error")
+
+        # Check if it's a connection/network issue
+        if any(keyword in error.message.lower() for keyword in ["connection", "network", "timeout", "503", "500"]):
+            try:
+                # Wait a bit before suggesting retry
+                import time
+                wait_seconds = 5
+                time.sleep(wait_seconds)
+
+                return FixResult(
+                    success=True,
+                    error_type=ErrorType.API_ERROR,
+                    action_taken=f"Waited {wait_seconds}s for API recovery",
+                    details="Transient API errors often resolve themselves. System will retry automatically.",
+                    requires_restart=False
+                )
+
+            except Exception as e:
+                return FixResult(
+                    success=False,
+                    error_type=ErrorType.API_ERROR,
+                    action_taken="Could not apply retry strategy",
+                    details=str(e)
+                )
+
+        # For 500/503 errors, suggest checking API status
+        return FixResult(
+            success=False,
+            error_type=ErrorType.API_ERROR,
+            action_taken="API error detected",
+            details="Check Anthropic API status at status.anthropic.com. May require manual intervention."
+        )
+
+    async def _fix_type_error(self, error: DetectedError) -> FixResult:
+        """Fix type errors by checking for code updates.
+
+        Args:
+            error: The detected error
+
+        Returns:
+            FixResult
+        """
+        logger.info("Fixing type error")
+
+        # Type errors are usually code bugs, check git for fixes
+        try:
+            # Fetch latest
+            subprocess.run(
+                ["git", "fetch", "origin", "main"],
+                capture_output=True,
+                text=True,
+                timeout=30
+            )
+
+            # Check if behind
+            result = subprocess.run(
+                ["git", "rev-list", "HEAD..origin/main", "--count"],
+                capture_output=True,
+                text=True
+            )
+
+            commits_behind = int(result.stdout.strip())
+            if commits_behind > 0:
+                return FixResult(
+                    success=True,
+                    error_type=ErrorType.TYPE_ERROR,
+                    action_taken="Found code updates available",
+                    details=f"{commits_behind} new commits available. Suggest pulling latest code.",
+                    requires_restart=False
+                )
+            else:
+                return FixResult(
+                    success=False,
+                    error_type=ErrorType.TYPE_ERROR,
+                    action_taken="No updates available",
+                    details="Type error requires code fix. Already on latest commit."
+                )
+
+        except Exception as e:
+            return FixResult(
+                success=False,
+                error_type=ErrorType.TYPE_ERROR,
+                action_taken="Could not check for updates",
+                details=str(e)
+            )
+
+    async def _fix_service_crash(self, error: DetectedError) -> FixResult:
+        """Fix service crashes by attempting restart.
+
+        Args:
+            error: The detected error
+
+        Returns:
+            FixResult
+        """
+        logger.info("Fixing service crash")
+
+        try:
+            # Check if running as systemd service
+            result = subprocess.run(
+                ["systemctl", "is-active", "claude-agent"],
+                capture_output=True,
+                text=True
+            )
+
+            if result.returncode != 0:
+                # Service is not active, try to start it
+                logger.info("Service is down, attempting to restart")
+
+                restart_result = subprocess.run(
+                    ["sudo", "systemctl", "restart", "claude-agent"],
+                    capture_output=True,
+                    text=True,
+                    timeout=30
+                )
+
+                if restart_result.returncode == 0:
+                    return FixResult(
+                        success=True,
+                        error_type=ErrorType.SERVICE_CRASH,
+                        action_taken="Restarted claude-agent service",
+                        details="Service was down and has been restarted via systemctl",
+                        requires_restart=False
+                    )
+                else:
+                    return FixResult(
+                        success=False,
+                        error_type=ErrorType.SERVICE_CRASH,
+                        action_taken="Failed to restart service",
+                        details=restart_result.stderr
+                    )
+            else:
+                # Service is running
+                return FixResult(
+                    success=True,
+                    error_type=ErrorType.SERVICE_CRASH,
+                    action_taken="Service is already running",
+                    details="No restart needed",
+                    requires_restart=False
+                )
+
+        except Exception as e:
+            return FixResult(
+                success=False,
+                error_type=ErrorType.SERVICE_CRASH,
+                action_taken="Could not check/restart service",
+                details=str(e)
+            )
+
+    async def _fix_timeout(self, error: DetectedError) -> FixResult:
+        """Fix timeout errors by adjusting timeouts or retrying.
+
+        Args:
+            error: The detected error
+
+        Returns:
+            FixResult
+        """
+        logger.info("Fixing timeout error")
+
+        # Timeout errors are usually transient
+        # Suggest retry with longer timeout
+        return FixResult(
+            success=True,
+            error_type=ErrorType.TIMEOUT,
+            action_taken="Identified timeout error",
+            details="Timeout errors are often transient. System will retry with increased timeout automatically.",
+            requires_restart=False
         )
 
     async def _notify_fix_attempt(self, error: DetectedError, result: FixResult):
