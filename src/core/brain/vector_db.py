@@ -1,5 +1,6 @@
 """ChromaDB vector database wrapper."""
 
+import asyncio
 import chromadb
 from chromadb.config import Settings
 import logging
@@ -34,6 +35,9 @@ class VectorDatabase:
             settings=Settings(anonymized_telemetry=False)
         )
 
+        # Enable WAL mode on ChromaDB's underlying SQLite for concurrent read/write
+        self._enable_wal_mode(path)
+
         # Get or create collection
         self.collection = self.client.get_or_create_collection(
             name=collection_name,
@@ -42,13 +46,32 @@ class VectorDatabase:
 
         logger.info(f"Initialized vector DB at {path}, collection: {collection_name}")
 
+    @staticmethod
+    def _enable_wal_mode(path: str):
+        """Enable WAL journal mode on ChromaDB's underlying SQLite.
+
+        WAL mode allows concurrent reads while writing, improving performance
+        when multiple components (scheduler, learning, conversation) hit the DB.
+        """
+        import sqlite3
+        from pathlib import Path
+        db_path = Path(path) / "chroma.sqlite3"
+        if db_path.exists():
+            try:
+                conn = sqlite3.connect(str(db_path))
+                conn.execute("PRAGMA journal_mode=WAL")
+                conn.close()
+                logger.debug(f"WAL mode enabled for {db_path}")
+            except Exception as e:
+                logger.debug(f"Could not enable WAL mode: {e}")
+
     async def store(
         self,
         text: str,
         metadata: Optional[Dict[str, Any]] = None,
         doc_id: Optional[str] = None
     ) -> str:
-        """Store text with embeddings.
+        """Store text with embeddings (non-blocking).
 
         Args:
             text: Text to store
@@ -61,10 +84,14 @@ class VectorDatabase:
         if not doc_id:
             doc_id = str(uuid.uuid4())
 
-        self.collection.add(
-            documents=[text],
-            metadatas=[metadata or {}],
-            ids=[doc_id]
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(
+            None,
+            lambda: self.collection.add(
+                documents=[text],
+                metadatas=[metadata or {}],
+                ids=[doc_id]
+            )
         )
 
         logger.debug(f"Stored document {doc_id}")
@@ -76,7 +103,7 @@ class VectorDatabase:
         n_results: int = 5,
         filter_metadata: Optional[Dict[str, Any]] = None
     ) -> List[Dict[str, Any]]:
-        """Semantic search for relevant memories.
+        """Semantic search for relevant memories (non-blocking).
 
         Args:
             query: Search query
@@ -86,10 +113,14 @@ class VectorDatabase:
         Returns:
             List of matching documents with metadata and distances
         """
-        results = self.collection.query(
-            query_texts=[query],
-            n_results=n_results,
-            where=filter_metadata
+        loop = asyncio.get_event_loop()
+        results = await loop.run_in_executor(
+            None,
+            lambda: self.collection.query(
+                query_texts=[query],
+                n_results=n_results,
+                where=filter_metadata
+            )
         )
 
         # Format results

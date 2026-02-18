@@ -1,7 +1,9 @@
 """Tool registry for managing available tools."""
 
+import asyncio
 import logging
 import os
+import time
 from typing import List, Dict, Any, Optional
 from .base import BaseTool
 from .bash import BashTool
@@ -9,6 +11,7 @@ from .file import FileTool
 from .web import WebTool
 from .browser import BrowserTool
 from ..types import ToolResult
+from ..nervous_system.policy_gate import PolicyGate
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +33,13 @@ class ToolRegistry:
         self.config = config or {}
         self.security_guard = security_guard
         self.semantic_validation_enabled = self.config.get('semantic_validation', {}).get('enabled', False)
+
+        # Tool performance tracking (Self-Learning)
+        self._tool_stats: Dict[str, Dict[str, Any]] = {}
+        self._consecutive_failure_limit = 5  # auto-disable after N consecutive failures
+
+        # Policy Gate (Nervous System) — risk checks before tool execution
+        self.policy_gate = PolicyGate()
 
         # Get safety config
         safety_config = self.config.get('safety', {})
@@ -111,6 +121,32 @@ class ToolRegistry:
                 error=f"Tool not found: {tool_name}"
             )
 
+        # Check if tool is temporarily disabled due to consecutive failures
+        stats = self._tool_stats.get(tool_name, {})
+        if stats.get("disabled", False):
+            # Re-enable after 5 minutes cooldown
+            if time.time() - stats.get("disabled_at", 0) > 300:
+                stats["disabled"] = False
+                stats["consecutive_failures"] = 0
+                logger.info(f"Tool {tool_name} re-enabled after cooldown")
+            else:
+                return ToolResult(
+                    success=False,
+                    error=f"Tool {tool_name} is temporarily disabled after {self._consecutive_failure_limit} consecutive failures. Will retry in a few minutes."
+                )
+
+        # ========================================================================
+        # POLICY GATE: Risk-based permission check (Nervous System)
+        # ========================================================================
+        operation = params.get("operation")
+        allowed, reason = self.policy_gate.check(
+            tool_name=tool_name,
+            operation=operation,
+            params=params
+        )
+        if not allowed:
+            return ToolResult(success=False, error=f"Policy gate blocked: {reason}")
+
         # ========================================================================
         # LAYER 11: SEMANTIC VALIDATION (for dangerous tools only)
         # ========================================================================
@@ -141,9 +177,33 @@ class ToolRegistry:
                 logger.debug(f"Semantic validation error (allowing): {e}")
                 # Fail open - don't block legitimate use if validation fails
 
+        # Tool-specific timeout (bash has its own, others get 60s default)
+        tool_timeout = params.pop('_timeout', 60)
+        if tool_name == 'bash':
+            # BashTool handles its own timeout internally
+            tool_timeout = None
+
+        exec_start = time.time()
         try:
-            return await tool.execute(**params)
+            if tool_timeout:
+                result = await asyncio.wait_for(
+                    tool.execute(**params),
+                    timeout=tool_timeout
+                )
+            else:
+                result = await tool.execute(**params)
+
+            self._record_tool_result(tool_name, result.success, time.time() - exec_start)
+            return result
+        except asyncio.TimeoutError:
+            self._record_tool_result(tool_name, False, time.time() - exec_start, "timeout")
+            logger.error(f"Tool {tool_name} timed out after {tool_timeout}s")
+            return ToolResult(
+                success=False,
+                error=f"Tool {tool_name} timed out after {tool_timeout} seconds"
+            )
         except Exception as e:
+            self._record_tool_result(tool_name, False, time.time() - exec_start, str(e))
             logger.error(f"Error executing tool {tool_name}: {e}")
             return ToolResult(
                 success=False,
@@ -166,6 +226,48 @@ class ToolRegistry:
             catalog.print_status()
         except Exception as e:
             logger.error(f"Failed to load talent catalog: {e}")
+
+    def _record_tool_result(self, tool_name: str, success: bool, latency: float, error: str = None):
+        """Record tool execution result for performance tracking."""
+        if tool_name not in self._tool_stats:
+            self._tool_stats[tool_name] = {
+                "total_calls": 0, "successes": 0, "failures": 0,
+                "total_latency": 0.0, "consecutive_failures": 0,
+                "last_error": None, "disabled": False, "disabled_at": 0
+            }
+
+        stats = self._tool_stats[tool_name]
+        stats["total_calls"] += 1
+        stats["total_latency"] += latency
+
+        if success:
+            stats["successes"] += 1
+            stats["consecutive_failures"] = 0
+        else:
+            stats["failures"] += 1
+            stats["consecutive_failures"] += 1
+            stats["last_error"] = error
+
+            # Auto-disable after too many consecutive failures
+            if stats["consecutive_failures"] >= self._consecutive_failure_limit:
+                stats["disabled"] = True
+                stats["disabled_at"] = time.time()
+                logger.warning(f"Tool {tool_name} auto-disabled after {self._consecutive_failure_limit} consecutive failures")
+
+    def get_tool_stats(self) -> Dict[str, Any]:
+        """Get performance stats for all tools (for system prompt injection)."""
+        summary = {}
+        for name, stats in self._tool_stats.items():
+            total = stats["total_calls"]
+            if total == 0:
+                continue
+            summary[name] = {
+                "success_rate": round(stats["successes"] / total * 100, 1),
+                "avg_latency": round(stats["total_latency"] / total, 2),
+                "total_calls": total,
+                "disabled": stats["disabled"]
+            }
+        return summary
 
     def _register_email_tool(self):
         """Register Email tool if credentials provided in environment."""

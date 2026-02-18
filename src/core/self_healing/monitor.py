@@ -53,10 +53,11 @@ class SelfHealingMonitor:
         logger.info("🩺 Self-healing monitor started")
 
         if self.telegram:
-            await self.telegram.send_message(
-                "🩺 **Self-Healing Monitor Active**\n\n"
+            await self.telegram.notify(
+                "🩺 *Self-Healing Monitor Active*\n\n"
                 f"Checking for errors every {self.check_interval // 60} minutes.\n"
-                f"Auto-fix: {'Enabled ✅' if self.auto_fix_enabled else 'Disabled ⚠️'}"
+                f"Auto-fix: {'Enabled' if self.auto_fix_enabled else 'Disabled'}",
+                level="info"
             )
 
         # Run monitoring loop
@@ -142,7 +143,7 @@ class SelfHealingMonitor:
             if needs_restart:
                 message += "\n⚠️ **Service restart recommended**\nSend: 'restart' to apply fixes"
 
-            await self.telegram.send_message(message)
+            await self.telegram.notify(message)
 
     async def _notify_critical_errors(self, errors):
         """Notify about critical errors.
@@ -164,7 +165,7 @@ class SelfHealingMonitor:
 
         message += "\n⚠️ **Immediate attention required!**"
 
-        await self.telegram.send_message(message)
+        await self.telegram.notify(message)
 
     async def _notify_high_severity_errors(self, errors):
         """Notify about high-severity errors that aren't auto-fixable.
@@ -182,7 +183,7 @@ class SelfHealingMonitor:
 
 Monitoring and will attempt auto-fix if possible.
 """
-        await self.telegram.send_message(message)
+        await self.telegram.notify(message)
 
     async def get_status(self) -> dict:
         """Get monitor status.

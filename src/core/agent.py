@@ -14,6 +14,7 @@ from .tools.registry import ToolRegistry
 from .brain.core_brain import CoreBrain
 from .brain.digital_clone_brain import DigitalCloneBrain
 from ..integrations.anthropic_client import AnthropicClient
+from .nervous_system.state_machine import AgentStateMachine, AgentState
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +48,9 @@ class AutonomousAgent:
         self.tools = ToolRegistry(config=tool_config)
         self.brain = brain
 
+        # Nervous System: state machine for tracking execution state + cancellation
+        self.state_machine = AgentStateMachine()
+
         logger.info(f"Initialized AutonomousAgent with {config.default_model}")
 
     async def run(
@@ -69,6 +73,11 @@ class AutonomousAgent:
 
         # Store current task for semantic validation (Layer 11)
         self._current_task = task
+
+        # Reset state machine + policy gate for new run
+        self.state_machine.reset()
+        self.tools.policy_gate.reset_run_counts()
+        self.state_machine.transition(AgentState.THINKING, task[:80])
 
         logger.info(f"Starting autonomous execution: {task}")
         logger.info(f"Max iterations: {max_iterations}")
@@ -98,7 +107,14 @@ class AutonomousAgent:
             logger.info(f"Iteration {iteration}/{max_iterations}")
 
             try:
+                # Check for cancellation
+                if self.state_machine.is_cancelled():
+                    logger.info("Task cancelled by user")
+                    self.state_machine.reset()
+                    return "Task cancelled."
+
                 # Call Claude API
+                self.state_machine.transition(AgentState.THINKING)
                 response = await self.api_client.create_message(
                     model=self.config.default_model,
                     messages=messages,
@@ -116,6 +132,7 @@ class AutonomousAgent:
 
                 elif response.stop_reason == "tool_use":
                     # Execute tools
+                    self.state_machine.transition(AgentState.EXECUTING)
                     logger.info("Executing tool calls...")
 
                     # Add assistant message
@@ -176,10 +193,12 @@ class AutonomousAgent:
             final_result = "Max iterations reached. Task may be incomplete."
 
         logger.info(f"Execution complete after {iteration} iterations")
+        self.state_machine.transition(AgentState.RESPONDING)
+        self.state_machine.reset()
         return final_result or "Task completed"
 
     async def _execute_tool_calls(self, content: List[Any]) -> List[Dict[str, Any]]:
-        """Execute tool calls from Claude's response.
+        """Execute tool calls from Claude's response (parallel when safe).
 
         Args:
             content: Response content blocks
@@ -187,38 +206,63 @@ class AutonomousAgent:
         Returns:
             List of tool result content blocks
         """
+        # Collect all tool_use blocks
+        tool_blocks = [b for b in content if b.type == "tool_use"]
+
+        if not tool_blocks:
+            return []
+
+        # Execute all tool calls in parallel
+        async def _run_single_tool(block):
+            tool_name = block.name
+            tool_input = block.input
+            tool_use_id = block.id
+
+            logger.info(f"Executing tool: {tool_name}")
+            logger.debug(f"Tool input: {tool_input}")
+
+            result = await self.tools.execute_tool(
+                tool_name,
+                user_message=getattr(self, '_current_task', ''),
+                llm_client=self.api_client,
+                **tool_input
+            )
+
+            tool_result = {
+                "type": "tool_result",
+                "tool_use_id": tool_use_id,
+                "content": result.output if result.success else f"Error: {result.error}"
+            }
+
+            if not result.success:
+                tool_result["is_error"] = True
+
+            logger.info(f"Tool {tool_name}: {'Success' if result.success else 'Failed'}")
+            return tool_result
+
+        # Single tool: run directly. Multiple tools: run in parallel.
+        if len(tool_blocks) == 1:
+            return [await _run_single_tool(tool_blocks[0])]
+
+        logger.info(f"Running {len(tool_blocks)} tool calls in parallel")
+        results = await asyncio.gather(
+            *[_run_single_tool(b) for b in tool_blocks],
+            return_exceptions=True
+        )
+
+        # Handle any exceptions from gather
         tool_results = []
-
-        for block in content:
-            if block.type == "tool_use":
-                tool_name = block.name
-                tool_input = block.input
-                tool_use_id = block.id
-
-                logger.info(f"Executing tool: {tool_name}")
-                logger.debug(f"Tool input: {tool_input}")
-
-                # Execute tool with semantic validation (Layer 11)
-                result = await self.tools.execute_tool(
-                    tool_name,
-                    user_message=getattr(self, '_current_task', ''),
-                    llm_client=self.api_client,
-                    **tool_input
-                )
-
-                # Format result for Claude
-                tool_result = {
+        for i, result in enumerate(results):
+            if isinstance(result, Exception):
+                logger.error(f"Tool {tool_blocks[i].name} raised exception: {result}")
+                tool_results.append({
                     "type": "tool_result",
-                    "tool_use_id": tool_use_id,
-                    "content": result.output if result.success else f"Error: {result.error}"
-                }
-
-                if not result.success:
-                    tool_result["is_error"] = True
-
-                tool_results.append(tool_result)
-
-                logger.info(f"Tool {tool_name}: {'Success' if result.success else 'Failed'}")
+                    "tool_use_id": tool_blocks[i].id,
+                    "content": f"Error: {str(result)}",
+                    "is_error": True
+                })
+            else:
+                tool_results.append(result)
 
         return tool_results
 

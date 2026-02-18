@@ -576,7 +576,7 @@ class AutoFixer:
             message += "\n⚠️ **Restart required** for changes to take effect"
 
         try:
-            await self.telegram.send_message(message)
+            await self.telegram.notify(message, level="warning")
         except Exception as e:
             logger.error(f"Failed to send Telegram notification: {e}")
 

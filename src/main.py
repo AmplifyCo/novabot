@@ -25,11 +25,20 @@ from src.utils.telegram_notifier import TelegramNotifier, TelegramCommandHandler
 from src.utils.dashboard import Dashboard
 from src.utils.auto_updater import AutoUpdater
 from src.core.scheduler import ReminderScheduler
+from src.core.self_healing.monitor import SelfHealingMonitor
+from src.core.memory_consolidator import MemoryConsolidator
 
 # Setup logging
+LOG_DIR = Path("data/logs")
+LOG_DIR.mkdir(parents=True, exist_ok=True)
+
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler(LOG_DIR / "agent.log")
+    ]
 )
 
 logger = logging.getLogger(__name__)
@@ -290,6 +299,22 @@ Models: Claude Opus/Sonnet/Haiku + SmolLM2 (local fallback)"""
         reminder_scheduler = ReminderScheduler(telegram=telegram, data_dir="./data")
         reminder_task = asyncio.create_task(reminder_scheduler.start())
 
+        # Start self-healing monitor background task
+        self_healing = SelfHealingMonitor(
+            telegram_notifier=telegram,
+            check_interval=300,  # 5 minutes
+            log_file=str(LOG_DIR / "agent.log"),
+            auto_fix_enabled=True
+        )
+        self_healing_task = asyncio.create_task(self_healing.start())
+
+        # Start memory consolidation background task
+        memory_consolidator = MemoryConsolidator(
+            digital_brain=digital_brain,
+            telegram=telegram
+        )
+        memory_consolidation_task = asyncio.create_task(memory_consolidator.start())
+
         # Start auto-updater background task
         auto_update_task = None
         if auto_updater.enabled:
@@ -303,6 +328,10 @@ Models: Claude Opus/Sonnet/Haiku + SmolLM2 (local fallback)"""
             logger.info("\n👋 Shutting down gracefully...")
             if reminder_task:
                 reminder_task.cancel()
+            if self_healing_task:
+                self_healing_task.cancel()
+            if memory_consolidation_task:
+                memory_consolidation_task.cancel()
             if auto_update_task:
                 auto_update_task.cancel()
             if dashboard_task:

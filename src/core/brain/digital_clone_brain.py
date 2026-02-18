@@ -163,21 +163,31 @@ class DigitalCloneBrain:
     # COLLECTIVE — Preferences
     # ================================================================
 
-    async def remember_preference(self, category: str, preference: str):
+    async def remember_preference(
+        self,
+        category: str,
+        preference: str,
+        source: str = "llm_derived",
+        confidence: float = 0.7
+    ):
         """Remember a user preference (shared across all talents).
 
         Args:
             category: Preference category (food, travel, etc.)
             preference: Preference description
+            source: Origin — 'user_stated', 'llm_derived', or 'system'
+            confidence: Confidence score 0.0-1.0 (user_stated should be 1.0)
         """
         await self.preferences.store(
             text=f"Preference in {category}: {preference}",
             metadata={
                 "category": category,
+                "source": source,
+                "confidence": confidence,
                 "timestamp": datetime.now().isoformat()
             }
         )
-        logger.info(f"Remembered preference: {category} - {preference}")
+        logger.info(f"Remembered preference: {category} - {preference} (source={source}, confidence={confidence})")
 
     # ================================================================
     # COLLECTIVE — Contacts
@@ -360,20 +370,22 @@ Assistant ({model_used}): {assistant_response}"""
         """
         resolved_talent = self._resolve_talent(channel=channel, talent=talent)
 
-        # Search in the correct isolated context
+        # Search with ChromaDB where filter for conversation type
         if resolved_talent:
             ctx = self._get_context(resolved_talent)
             results = await ctx.search(
-                query="recent conversation",
-                n_results=limit * 2
+                query="conversation",
+                n_results=limit,
+                filter_metadata={"type": "conversation"}
             )
         else:
             results = await self.memory.search(
-                query="recent conversation",
-                n_results=limit * 2
+                query="conversation",
+                n_results=limit,
+                filter_metadata={"type": "conversation"}
             )
 
-        # Filter for conversation type and sort by timestamp
+        # Format results and sort by timestamp
         conversations = [
             {
                 "user_message": r["metadata"].get("user_message", ""),
@@ -383,7 +395,6 @@ Assistant ({model_used}): {assistant_response}"""
                 "talent": r["metadata"].get("talent", "unknown"),
             }
             for r in results
-            if r["metadata"].get("type") == "conversation"
         ]
 
         conversations.sort(key=lambda x: x["timestamp"], reverse=True)

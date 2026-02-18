@@ -188,13 +188,14 @@ Assistant ({model_used}): {assistant_response}"""
         Returns:
             List of conversation turn dicts
         """
-        # Search for recent build conversations
+        # Use ChromaDB where filter to get only build_conversation type
         results = await self.db.search(
-            query="recent build conversation",
-            n_results=limit * 2
+            query="conversation",
+            n_results=limit,
+            filter_metadata={"type": "build_conversation"}
         )
 
-        # Filter for build_conversation type and sort by timestamp
+        # Format results and sort by timestamp (most recent first)
         conversations = [
             {
                 "user_message": r["metadata"].get("user_message", ""),
@@ -203,10 +204,8 @@ Assistant ({model_used}): {assistant_response}"""
                 "timestamp": r["metadata"].get("timestamp", "")
             }
             for r in results
-            if r["metadata"].get("type") == "build_conversation"
         ]
 
-        # Sort by timestamp (most recent first)
         conversations.sort(
             key=lambda x: x["timestamp"],
             reverse=True
@@ -408,9 +407,13 @@ Assistant ({model_used}): {assistant_response}"""
             text="""Bot Identity:
 Name: Nova - the AutoBot
 Architecture:
-- Heart: coreEngine + ConversationManager (processing, routing, intelligence)
-- Brain: CoreBrain with intelligence principles (how to think — shared engine rules)
-- Memory: DigitalCloneBrain (what you know about the user — preferences, conversations, contacts)
+- Heart: coreEngine + ConversationManager (routing, sessions, API fallback, context building)
+- Brain: CoreBrain with intelligence principles (reasoning, prompts, guardrails, versioning)
+- Nervous System: ExecutionGovernor (run state, policy gate, plan persistence, outbox, DLQ — sits between Heart and Talents)
+- Memory: DigitalCloneBrain (storage, retrieval, consolidation, confidence tracking)
+- Talents: Tools + Registry (action execution, timeouts, parallel execution)
+- Self-Healing: SelfHealingMonitor (error detection, auto-fix, pattern analysis)
+- Self-Learning: Feedback Loop (tool tracking, outcome evaluation, memory improvement)
 Personality: Intelligent, warm, witty. Think like a smart friend, not a robot.""",
             metadata={
                 "type": "identity",
