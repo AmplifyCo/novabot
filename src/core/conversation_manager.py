@@ -148,7 +148,8 @@ class ConversationManager:
             response = await self._process_with_fallback(message)
 
             # Store conversation turn in Brain for context continuity
-            if self.brain:
+            # (Only DigitalCloneBrain has conversation methods, CoreBrain does not)
+            if self.brain and hasattr(self.brain, 'store_conversation_turn'):
                 await self.brain.store_conversation_turn(
                     user_message=message,
                     assistant_response=response,
@@ -287,20 +288,22 @@ class ConversationManager:
                 return f"{warning}\n\n❌ Local model not available."
 
             # RETRIEVE CONTEXT FROM BRAIN
+            # (Only DigitalCloneBrain has conversation methods)
             messages = []
             conversation_context = ""
 
-            if self.brain:
+            if self.brain and hasattr(self.brain, 'get_conversation_context'):
                 conversation_context = await self.brain.get_conversation_context(
                     current_message=message,
                     limit=3
                 )
 
                 # Build message history
-                recent_turns = await self.brain.get_recent_conversation(limit=3)
-                for turn in reversed(recent_turns):
-                    messages.append({"role": "user", "content": turn["user_message"]})
-                    messages.append({"role": "assistant", "content": turn["assistant_response"]})
+                if hasattr(self.brain, 'get_recent_conversation'):
+                    recent_turns = await self.brain.get_recent_conversation(limit=3)
+                    for turn in reversed(recent_turns):
+                        messages.append({"role": "user", "content": turn["user_message"]})
+                        messages.append({"role": "assistant", "content": turn["assistant_response"]})
 
             # Add current message
             messages.append({"role": "user", "content": message})
@@ -328,8 +331,8 @@ Capabilities:
 
             response_text = local_response["content"][0]["text"]
 
-            # Queue for Claude review
-            if self.brain:
+            # Queue for Claude review (only DigitalCloneBrain has this)
+            if self.brain and hasattr(self.brain, 'queue_for_claude_review'):
                 await self.brain.queue_for_claude_review(
                     message=message,
                     local_response=response_text
@@ -354,7 +357,7 @@ Capabilities:
             # Get context from Brain if available
             system_prompt = "You are a helpful AI assistant. Be concise and clear."
 
-            if self.brain:
+            if self.brain and hasattr(self.brain, 'get_relevant_context'):
                 context = await self.brain.get_relevant_context(message, max_results=3)
                 if context:
                     system_prompt += f"\n\n{context}"
