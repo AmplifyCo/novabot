@@ -29,20 +29,56 @@ agent:
       - sudo apt update
       - sudo pip install
       # Service management
-      - sudo systemctl restart claude-agent
+      - sudo systemctl restart digital-twin
       - sudo systemctl status
       # Firewall
       - sudo firewall-cmd
       # Logs
       - sudo journalctl
     allowed_commands:
+      # Package managers
       - npm
       - pip
+      - yum
+      - apt
+      - apt-get
+      # Version control
       - git
+      # Languages & testing
       - python
       - pytest
       - node
       - bash
+      # System inspection (safe read-only commands)
+      - cat
+      - ls
+      - pwd
+      - echo
+      - which
+      - whereis
+      - uname
+      - whoami
+      - id
+      - hostname
+      - uptime
+      - df
+      - du
+      - ps
+      - grep
+      - find
+      - head
+      - tail
+      - wc
+      - sort
+      - uniq
+      # File operations
+      - mkdir
+      - touch
+      - cp
+      - mv
+      - chmod
+      - chown
+      # Browsers
       - w3m
       - chromium
       - chromium-browser
