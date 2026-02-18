@@ -185,6 +185,11 @@ echo "📦 Installing Python dependencies..."
 pip install --upgrade pip
 pip install -r requirements.txt
 
+# Install dt-setup command globally
+echo "🔧 Installing dt-setup configuration wizard..."
+make install
+echo "✅ dt-setup command installed (works like git, python, npm)"
+
 # Configure limited sudo access
 echo "🔐 Configuring limited sudo access for agent..."
 CURRENT_USER=$(whoami)
@@ -608,8 +613,9 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 echo "Next Steps:"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
-echo "1. Configure .env file:"
-echo "   nano .env"
+echo "1. Configure credentials:"
+echo "   dt-setup              # Interactive wizard (recommended)"
+echo "   # OR manually edit:  nano .env"
 echo ""
 echo "2. Start the agent:"
 echo "   sudo systemctl start digital-twin"
