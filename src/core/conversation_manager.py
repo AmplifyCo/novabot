@@ -238,18 +238,19 @@ class ConversationManager:
             return f"Intent recognized: {action}\n(Handler implementation needed)"
 
         else:
-            # Check if this is a code question
-            if self._is_code_question(message):
-                logger.info("Code question - using agent with tools")
+            # Distinguish between QUESTIONS and ACTIONS
+            if self._is_action_request(message):
+                # Action: "Implement X", "Fix Y", "Create Z" → Use agent with tools
+                logger.info("Action request - using agent with tools")
                 self._last_model_used = "claude-sonnet-4-5"
                 return await self.agent.run(
-                    task=f"Answer: {message}\n\nBe concise. Use tools for facts.",
-                    max_iterations=5,
+                    task=f"User request: {message}",
+                    max_iterations=10,
                     system_prompt=self._build_system_prompt()
                 )
             else:
-                # General conversation
-                logger.info("General conversation - using chat")
+                # Question: "What's X?", "How does Y work?" → Use chat with Brain context
+                logger.info("Question - using chat with Brain context")
                 self._last_model_used = "claude-sonnet-4-5"
                 return await self._chat(message)
 
@@ -424,22 +425,54 @@ Capabilities:
         else:
             return {"action": "unknown", "confidence": 0.3, "parameters": {}}
 
-    def _is_code_question(self, message: str) -> bool:
-        """Check if message is a code-related question.
+    def _is_action_request(self, message: str) -> bool:
+        """Check if message is an action request vs a question.
+
+        Action requests require agent.run() with tools.
+        Questions can be answered with chat + Brain context.
 
         Args:
             message: User message
 
         Returns:
-            True if code question
+            True if action request, False if question
         """
         msg_lower = message.lower()
-        keywords = [
-            "pending", "todo", "feature", "task", "code", "file",
-            "function", "class", "implement", "progress",
-            "codebase", "project", "engine", "brain"
+
+        # Action keywords (imperative verbs)
+        action_keywords = [
+            "implement", "create", "build", "add", "make",
+            "fix", "update", "change", "modify", "refactor",
+            "delete", "remove", "write", "install", "deploy",
+            "run", "execute", "test", "debug"
         ]
-        return any(keyword in msg_lower for keyword in keywords)
+
+        # Question keywords
+        question_keywords = [
+            "what", "how", "why", "when", "where", "which",
+            "is", "are", "does", "can", "should", "would",
+            "tell me", "show me", "list", "explain"
+        ]
+
+        # Check for question indicators
+        has_question = (
+            msg_lower.strip().endswith("?") or
+            any(q in msg_lower for q in question_keywords)
+        )
+
+        # Check for action indicators
+        has_action = any(a in msg_lower for a in action_keywords)
+
+        # Questions take precedence - use chat mode
+        if has_question and not has_action:
+            return False
+
+        # Clear action without question indicators
+        if has_action and not has_question:
+            return True
+
+        # Ambiguous - default to chat (safer, faster)
+        return False
 
     def _build_system_prompt(self) -> str:
         """Build system prompt for agent tasks.
