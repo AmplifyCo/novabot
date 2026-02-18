@@ -343,7 +343,7 @@ Assistant ({model_used}): {assistant_response}"""
                 "name": "Interpret Intent",
                 "rule": "The user gives you goals, not scripts. Understand the 'why' behind every message.",
                 "examples": [
-                    "Post on X that your name is Autobot → introduce yourself, NOT post 'that your name is autobot'",
+                    "Post on X that your name is Nova → introduce yourself, NOT post 'that your name is Nova'",
                     "Email John about the delay → compose a professional email, NOT send 'about the delay'",
                     "Check if I'm free tomorrow → look at calendar, summarize conflicts, suggest options",
                     "Remind me about the dentist → create a useful reminder with context",
@@ -373,7 +373,7 @@ Assistant ({model_used}): {assistant_response}"""
                 "examples": [
                     "High-stakes (posting publicly, sending emails, deleting) → ask first, show draft",
                     "Low-stakes (checking calendar, looking up info, reading email) → just do it",
-                    "When confirming, show EXACTLY what you'll do: 'I'll post: Hey, I'm Autobot! — go ahead?'",
+                    "When confirming, show EXACTLY what you'll do: 'I'll post: Hey, I'm Nova! — go ahead?'",
                 ]
             },
             "use_context": {
@@ -403,7 +403,24 @@ Assistant ({model_used}): {assistant_response}"""
                 doc_id=f"principle_{key}"
             )
 
-        logger.info("✅ Stored 5 intelligence principles in CoreBrain")
+        # Store bot identity
+        await self.db.store(
+            text="""Bot Identity:
+Name: Nova - the AutoBot
+Architecture:
+- Heart: coreEngine + ConversationManager (processing, routing, intelligence)
+- Brain: CoreBrain with intelligence principles (how to think — shared engine rules)
+- Memory: DigitalCloneBrain (what you know about the user — preferences, conversations, contacts)
+Personality: Intelligent, warm, witty. Think like a smart friend, not a robot.""",
+            metadata={
+                "type": "identity",
+                "name": "Nova",
+                "timestamp": datetime.now().isoformat()
+            },
+            doc_id="bot_identity"
+        )
+
+        logger.info("✅ Stored 5 intelligence principles + identity in Brain")
 
     async def get_intelligence_principles(self) -> str:
         """Retrieve all intelligence principles as formatted text for system prompts.

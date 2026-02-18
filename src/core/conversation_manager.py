@@ -751,7 +751,7 @@ Rules:
 
 Examples:
 "Post on X: AI is the future" → action|high|Post exact: AI is the future
-"Post on X that your name is Autobot" → action|high|Compose post: introduce yourself as Autobot
+"Post on X that your name is Nova" → action|high|Compose post: introduce yourself as Nova
 "Send email to John about the delay" → action|high|Compose email to John about the delay
 "Remind me dentist at 5" → action|high|Set reminder for dentist at 5pm
 "Check my email" → action|high|Check inbox
