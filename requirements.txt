@@ -36,6 +36,11 @@ pyyaml>=6.0.1
 psutil>=5.9.7
 structlog>=24.1.0
 
+# Email & Calendar Tools (Gmail, Outlook, iCloud support)
+caldav>=1.3.6
+icalendar>=5.0.11
+pytz>=2023.3
+
 # ================================================
 # OPTIONAL DEPENDENCIES - Install separately if needed
 # ================================================

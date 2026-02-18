@@ -1,6 +1,7 @@
 """Tool registry for managing available tools."""
 
 import logging
+import os
 from typing import List, Dict, Any, Optional
 from .base import BaseTool
 from .bash import BashTool
@@ -43,6 +44,12 @@ class ToolRegistry:
         self.register(FileTool())
         self.register(WebTool())
         self.register(BrowserTool())
+
+        # Register Email tool if credentials provided
+        self._register_email_tool()
+
+        # Register Calendar tool if credentials provided
+        self._register_calendar_tool()
 
     def register(self, tool: BaseTool):
         """Register a tool.
@@ -144,3 +151,61 @@ class ToolRegistry:
             List of tool names
         """
         return list(self.tools.keys())
+
+    def _register_email_tool(self):
+        """Register Email tool if credentials provided in environment."""
+        try:
+            imap_server = os.getenv('EMAIL_IMAP_SERVER')
+            smtp_server = os.getenv('EMAIL_SMTP_SERVER')
+            email_address = os.getenv('EMAIL_ADDRESS')
+            email_password = os.getenv('EMAIL_PASSWORD')
+
+            if all([imap_server, smtp_server, email_address, email_password]):
+                from .email import EmailTool
+
+                imap_port = int(os.getenv('EMAIL_IMAP_PORT', '993'))
+                smtp_port = int(os.getenv('EMAIL_SMTP_PORT', '587'))
+
+                email_tool = EmailTool(
+                    imap_server=imap_server,
+                    smtp_server=smtp_server,
+                    email_address=email_address,
+                    password=email_password,
+                    imap_port=imap_port,
+                    smtp_port=smtp_port
+                )
+
+                self.register(email_tool)
+                logger.info("📧 Email tool registered")
+            else:
+                logger.debug("Email tool not registered (missing credentials in .env)")
+
+        except Exception as e:
+            logger.warning(f"Failed to register Email tool: {e}")
+
+    def _register_calendar_tool(self):
+        """Register Calendar tool if credentials provided in environment."""
+        try:
+            caldav_url = os.getenv('CALDAV_URL')
+            caldav_username = os.getenv('CALDAV_USERNAME')
+            caldav_password = os.getenv('CALDAV_PASSWORD')
+
+            if all([caldav_url, caldav_username, caldav_password]):
+                from .calendar import CalendarTool
+
+                calendar_name = os.getenv('CALDAV_CALENDAR_NAME')
+
+                calendar_tool = CalendarTool(
+                    caldav_url=caldav_url,
+                    username=caldav_username,
+                    password=caldav_password,
+                    calendar_name=calendar_name
+                )
+
+                self.register(calendar_tool)
+                logger.info("📅 Calendar tool registered")
+            else:
+                logger.debug("Calendar tool not registered (missing credentials in .env)")
+
+        except Exception as e:
+            logger.warning(f"Failed to register Calendar tool: {e}")
