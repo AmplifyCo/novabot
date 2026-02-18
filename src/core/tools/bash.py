@@ -195,7 +195,7 @@ class BashTool(BaseTool):
 
         # 1. Direct blocklist matching
         for blocked in self.blocked_commands:
-            if blocked.lower() in command_lower:
+            if str(blocked).lower() in command_lower:
                 logger.warning(f"Blocked by pattern: {blocked}")
                 return True
 
