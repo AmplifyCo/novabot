@@ -544,15 +544,16 @@ Return ONLY ONE WORD: build_feature, status, question, or action"""
         # Check for action indicators
         has_action = any(a in msg_lower for a in action_keywords)
 
-        # Questions take precedence - use chat mode
+        # Pure questions (no action keywords) - use chat mode
         if has_question and not has_action:
             return False
 
-        # Clear action without question indicators
-        if has_action and not has_question:
+        # Has action keyword - use agent mode with tools
+        # (even if phrased as question: "can you install X?" needs tools)
+        if has_action:
             return True
 
-        # Ambiguous - default to chat (safer, faster)
+        # No clear indicators - default to chat (safer, faster)
         return False
 
     async def _build_system_prompt(self, query: str = "") -> str:
