@@ -19,8 +19,23 @@ pip install -r requirements.txt
 
 ### 2. Run Configuration Wizard
 
+**Simple command (recommended):**
+```bash
+./setup              # Full interactive wizard
+./setup email        # Configure email only
+./setup telegram     # Configure Telegram only
+./setup core         # Configure API keys only
+```
+
+**Or use Python directly:**
 ```bash
 python configure.py
+```
+
+**Install globally (optional):**
+```bash
+sudo ./install.sh    # Creates 'dt-setup' command
+dt-setup             # Run from anywhere
 ```
 
 The interactive wizard will:
@@ -59,22 +74,26 @@ If you prefer to manually edit `.env`:
 
 ## Configuration Options
 
-### Email Only
+### Simple Commands
 
 ```bash
-python configure.py --email-only
+./setup                   # Full wizard (all tools)
+./setup digital-twin      # Full wizard (alias)
+./setup core              # API keys only
+./setup telegram          # Telegram only
+./setup email             # Email only
+./setup calendar          # Calendar only
+./setup help              # Show help
 ```
 
-### Calendar Only
+### Python Commands (Advanced)
 
 ```bash
-python configure.py --calendar-only
-```
-
-### Custom .env Location
-
-```bash
-python configure.py --env-file /path/to/.env
+python configure.py --email-only              # Email only
+python configure.py --calendar-only           # Calendar only
+python configure.py --core-only               # API keys only
+python configure.py --telegram-only           # Telegram only
+python configure.py --env-file /path/to/.env  # Custom .env location
 ```
 
 ## Supported Providers

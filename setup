@@ -1,0 +1,83 @@
+#!/bin/bash
+# Digital Twin Configuration Command
+# Simple wrapper for configure.py with friendly syntax
+#
+# Usage:
+#   setup                   # Full setup wizard
+#   setup core              # Configure API keys
+#   setup telegram          # Configure Telegram
+#   setup email             # Configure email
+#   setup calendar          # Configure calendar
+#   setup digital-twin      # Full setup (alias)
+
+# Get the directory where this script is located
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CONFIGURE_PY="$SCRIPT_DIR/configure.py"
+
+# Check if configure.py exists
+if [ ! -f "$CONFIGURE_PY" ]; then
+    echo "Error: configure.py not found at $CONFIGURE_PY"
+    exit 1
+fi
+
+# Parse arguments and map to configure.py flags
+case "$1" in
+    "")
+        # No arguments - run full wizard
+        python3 "$CONFIGURE_PY"
+        ;;
+    "digital-twin"|"all"|"full")
+        # Full setup
+        python3 "$CONFIGURE_PY"
+        ;;
+    "core"|"api"|"keys")
+        # Core API keys
+        python3 "$CONFIGURE_PY" --core-only
+        ;;
+    "telegram"|"tg")
+        # Telegram bot
+        python3 "$CONFIGURE_PY" --telegram-only
+        ;;
+    "email"|"mail")
+        # Email configuration
+        python3 "$CONFIGURE_PY" --email-only
+        ;;
+    "calendar"|"cal")
+        # Calendar configuration
+        python3 "$CONFIGURE_PY" --calendar-only
+        ;;
+    "--help"|"-h"|"help")
+        # Show help
+        cat << EOF
+Digital Twin Setup Tool
+
+Usage:
+  setup                   Full setup wizard (all tools)
+  setup digital-twin      Full setup (alias)
+  setup core              Configure API keys only
+  setup telegram          Configure Telegram bot only
+  setup email             Configure email only
+  setup calendar          Configure calendar only
+
+Aliases:
+  digital-twin, all, full → Full setup
+  core, api, keys         → Core API configuration
+  telegram, tg            → Telegram configuration
+  email, mail             → Email configuration
+  calendar, cal           → Calendar configuration
+
+Examples:
+  setup                   # Interactive wizard for all tools
+  setup email             # Just configure email
+  setup core              # Just update API keys
+
+For advanced options, use:
+  python3 configure.py --help
+
+EOF
+        ;;
+    *)
+        # Unknown argument - pass through to configure.py
+        python3 "$CONFIGURE_PY" "$@"
+        ;;
+esac
