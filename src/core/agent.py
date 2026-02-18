@@ -275,7 +275,9 @@ CRITICAL REQUIREMENTS:
 - NEVER hallucinate or provide synthetic/made-up information
 - Only provide factual information based on actual data from tools
 - If you don't know something, say so clearly rather than guessing
-- Base all responses on verified information from tool outputs"""
+- Base all responses on verified information from tool outputs
+- NEVER wrap your response in XML tags (no <result>, <attemptcompletion>, <analysis>, etc.)
+- Respond in plain text or Markdown only"""
 
         if context:
             prompt += f"\n\nRelevant context:\n{context}"

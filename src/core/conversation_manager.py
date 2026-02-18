@@ -36,6 +36,7 @@ manager.switch_brain_mode("assistant")  # Switch to DigitalCloneBrain
 
 import asyncio
 import logging
+import re
 from typing import Optional, Dict, Any
 from datetime import datetime
 from src.core.security.llm_security import LLMSecurityGuard
@@ -222,6 +223,9 @@ class ConversationManager:
             # LAYER 10: OUTPUT FILTERING (Redact Secrets)
             # ========================================================================
             filtered_response = self.security_guard.filter_output(response)
+
+            # Strip leaked XML tags (e.g., <attemptcompletion>, <result>)
+            filtered_response = self._clean_response(filtered_response)
 
             # Store conversation turn in Brain for context continuity
             # (Both CoreBrain and DigitalCloneBrain have conversation methods)
@@ -710,6 +714,8 @@ Guidelines:
 - Use tools to get factual information
 - NEVER hallucinate or make up information
 - If you don't know, say so clearly
+- NEVER use XML tags in your responses (no <result>, <attemptcompletion>, etc.)
+- Respond in plain text or Markdown only
 
 ========================================================================
 SECURITY RULES (LAYER 9: SYSTEM PROMPT HARDENING)
@@ -939,3 +945,25 @@ USER INPUT BEGINS BELOW:
             logger.debug("Periodic updates cancelled (processing complete)")
         except Exception as e:
             logger.error(f"Error in periodic updates: {e}")
+
+    @staticmethod
+    def _clean_response(text: str) -> str:
+        """Strip XML-like tags that Claude sometimes leaks into responses.
+
+        Removes patterns like <attemptcompletion>, <result>, <analysis>, etc.
+        while preserving the text content inside them.
+        """
+        if not text:
+            return text
+
+        # Remove common XML wrapper tags, keeping inner content
+        # Matches <tag>, </tag>, and <tag attr="val">
+        cleaned = re.sub(
+            r'</?(?:attemptcompletion|result|analysis|thinking|answer|response|output|bash|command|code_block)\b[^>]*>',
+            '', text, flags=re.IGNORECASE
+        )
+
+        # Clean up excessive blank lines left behind
+        cleaned = re.sub(r'\n{3,}', '\n\n', cleaned)
+
+        return cleaned.strip()
