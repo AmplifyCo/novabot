@@ -75,17 +75,22 @@ class ConversationManager:
         self.anthropic_client = anthropic_client
         self.router = model_router
 
-        # ALWAYS use DigitalCloneBrain for conversations
-        # ConversationManager handles user interactions → needs preferences, learning, personality
-        # CoreBrain is only for build tasks (agent.run with build_feature intent)
+        # TWO BRAINS:
+        # - DigitalCloneBrain: conversation memories, preferences, contacts (user data)
+        # - CoreBrain: intelligence principles, patterns, build knowledge (engine rules)
         if brain:
             self.brain = brain
-            brain_type = brain.__class__.__name__
         else:
-            # Prefer DigitalCloneBrain — it has preferences, contacts, conversation memory
             self.brain = getattr(agent, 'digital_brain', None) or getattr(agent, 'brain', None)
-            brain_type = self.brain.__class__.__name__ if self.brain else "None"
-            logger.info(f"ConversationManager using {brain_type} for conversations and learning")
+
+        self.core_brain = getattr(agent, 'core_brain', None)
+
+        brain_type = self.brain.__class__.__name__ if self.brain else "None"
+        core_type = self.core_brain.__class__.__name__ if self.core_brain else "None"
+        logger.info(f"ConversationManager: memories={brain_type}, principles={core_type}")
+
+        # Cache intelligence principles (loaded once from CoreBrain, used in every prompt)
+        self._intelligence_principles = None
 
         self._last_model_used = "claude-sonnet-4-5"
 
@@ -977,6 +982,38 @@ Return ONLY ONE WORD: build_feature, status, question, or action"""
         # No clear indicators - default to chat (safer, faster)
         return False
 
+    async def _get_intelligence_principles(self) -> str:
+        """Load intelligence principles from CoreBrain (cached after first load).
+
+        Principles are stored in CoreBrain (engine rules), not DigitalCloneBrain (user data).
+        Cached in memory so we don't hit the DB on every message.
+
+        Returns:
+            Formatted principles text for injection into system prompts
+        """
+        if self._intelligence_principles is not None:
+            return self._intelligence_principles
+
+        if self.core_brain and hasattr(self.core_brain, 'get_intelligence_principles'):
+            try:
+                self._intelligence_principles = await self.core_brain.get_intelligence_principles()
+                if self._intelligence_principles:
+                    logger.info("Loaded intelligence principles from CoreBrain")
+                    return self._intelligence_principles
+            except Exception as e:
+                logger.warning(f"Could not load principles from CoreBrain: {e}")
+
+        # Fallback: hardcoded minimal principles (CoreBrain not available)
+        self._intelligence_principles = """CORE INTELLIGENCE — THINK, DON'T PARROT:
+You are a Digital Twin — an intelligent extension of the user, not a command executor.
+Your job is to UNDERSTAND what the user means, then act on the MEANING — not the literal words.
+- Interpret intent: understand the "why", not just the words
+- Compose as yourself: first person, with personality
+- Act proactively: infer what's helpful from context
+- Confirm smartly: high-stakes → ask first, low-stakes → just do it
+- Use context: connect dots between messages, use Brain memory"""
+        return self._intelligence_principles
+
     async def _build_system_prompt(self, query: str = "") -> str:
         """Build system prompt for agent tasks with Brain context.
 
@@ -989,41 +1026,16 @@ Return ONLY ONE WORD: build_feature, status, question, or action"""
         uptime = datetime.now() - self.agent.start_time if hasattr(self.agent, 'start_time') else None
         uptime_str = f"{uptime.seconds // 3600}h {(uptime.seconds % 3600) // 60}m" if uptime else "Unknown"
 
+        # Load intelligence principles from CoreBrain (cached after first load)
+        principles_text = await self._get_intelligence_principles()
+
         base_prompt = f"""You are an autonomous, intelligent AI Digital Twin — you think and act proactively.
 
 Current Status:
 - Uptime: {uptime_str}
 - Model: {self.agent.config.default_model}
 
-CORE INTELLIGENCE — THINK, DON'T PARROT:
-You are a Digital Twin — an intelligent extension of the user, not a command executor.
-Your job is to UNDERSTAND what the user means, then act on the MEANING — not the literal words.
-
-1. INTERPRET INTENT: The user gives you goals, not scripts. Understand the "why" behind every message.
-   - "Post on X that your name is Autobot" → they want you to introduce yourself, NOT post "that your name is autobot"
-   - "Email John about the delay" → compose a professional email explaining the delay, NOT send "about the delay"
-   - "Check if I'm free tomorrow" → look at the calendar, summarize conflicts, suggest options
-   - "Remind me about the dentist" → create a useful reminder with context, not "about the dentist"
-
-2. COMPOSE AS YOURSELF (first person): When writing posts, emails, messages — you ARE the Digital Twin.
-   - Write naturally, with personality, as if YOU are speaking
-   - If the user says "post: [exact text]" with a colon, use their exact words
-   - If the user says "post that/about [topic]", compose the content yourself
-
-3. ACT PROACTIVELY: Don't wait for explicit commands — infer what would be helpful.
-   - "I have a meeting at 3pm" → check calendar, create event if missing
-   - "John's birthday is next week" → offer to send a message or set a reminder
-   - If the task says "Inferred task:", that's what you should do — the user didn't say it explicitly
-
-4. CONFIRM SMARTLY:
-   - High-stakes (posting publicly, sending emails, deleting things) → ask first, show draft
-   - Low-stakes (checking calendar, looking up info, reading email) → just do it
-   - When confirming, show EXACTLY what you'll do: "I'll post: 'Hey, I'm Autobot! 🤖' — go ahead?"
-
-5. USE CONTEXT: Remember the conversation flow. Connect the dots between messages.
-   - "yes" or "do it" → refers to the last thing discussed
-   - "the same one" → refers to a previously mentioned item
-   - Build on what you already know about the user from Brain memory
+{principles_text}
 
 COMMUNICATION:
 - Be EXTREMELY concise — 1-2 sentences max for confirmations and simple answers

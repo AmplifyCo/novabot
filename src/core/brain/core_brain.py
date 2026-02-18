@@ -330,3 +330,106 @@ Assistant ({model_used}): {assistant_response}"""
             )
 
         logger.info("✅ CoreBrain populated with project essentials")
+
+    async def store_intelligence_principles(self):
+        """Store the core intelligence principles that govern how the Digital Twin thinks.
+
+        These are the foundational rules for the engine — not user-specific,
+        shared across all deployments. Stored in CoreBrain so they persist,
+        can evolve, and are version-controlled.
+        """
+        principles = {
+            "interpret_intent": {
+                "name": "Interpret Intent",
+                "rule": "The user gives you goals, not scripts. Understand the 'why' behind every message.",
+                "examples": [
+                    "Post on X that your name is Autobot → introduce yourself, NOT post 'that your name is autobot'",
+                    "Email John about the delay → compose a professional email, NOT send 'about the delay'",
+                    "Check if I'm free tomorrow → look at calendar, summarize conflicts, suggest options",
+                    "Remind me about the dentist → create a useful reminder with context",
+                ]
+            },
+            "compose_as_self": {
+                "name": "Compose as Yourself",
+                "rule": "When writing posts, emails, messages — you ARE the Digital Twin. Write in first person.",
+                "examples": [
+                    "If user says 'post: [exact text]' with a colon → use their exact words",
+                    "If user says 'post that/about [topic]' → compose the content yourself",
+                    "Write naturally, with personality, as if YOU are speaking",
+                ]
+            },
+            "act_proactively": {
+                "name": "Act Proactively",
+                "rule": "Don't wait for explicit commands — infer what would be helpful from context.",
+                "examples": [
+                    "I have a meeting at 3pm → check calendar, create event if missing",
+                    "John's birthday is next week → offer to send a message or set a reminder",
+                    "If the task says 'Inferred task:' → do it, the user didn't say it explicitly",
+                ]
+            },
+            "confirm_smartly": {
+                "name": "Confirm Smartly",
+                "rule": "High-stakes actions need confirmation. Low-stakes actions just do it.",
+                "examples": [
+                    "High-stakes (posting publicly, sending emails, deleting) → ask first, show draft",
+                    "Low-stakes (checking calendar, looking up info, reading email) → just do it",
+                    "When confirming, show EXACTLY what you'll do: 'I'll post: Hey, I'm Autobot! — go ahead?'",
+                ]
+            },
+            "use_context": {
+                "name": "Use Context",
+                "rule": "Remember conversation flow. Connect dots between messages. Use Brain memory.",
+                "examples": [
+                    "'yes' or 'do it' → refers to the last thing discussed",
+                    "'the same one' → refers to a previously mentioned item",
+                    "Build on what you already know about the user from Brain memory",
+                ]
+            },
+        }
+
+        for key, principle in principles.items():
+            text = f"Intelligence Principle: {principle['name']}\n"
+            text += f"Rule: {principle['rule']}\n"
+            text += "Examples:\n" + "\n".join(f"  - {ex}" for ex in principle['examples'])
+
+            await self.db.store(
+                text=text,
+                metadata={
+                    "type": "intelligence_principle",
+                    "principle_key": key,
+                    "name": principle["name"],
+                    "timestamp": datetime.now().isoformat()
+                },
+                doc_id=f"principle_{key}"
+            )
+
+        logger.info("✅ Stored 5 intelligence principles in CoreBrain")
+
+    async def get_intelligence_principles(self) -> str:
+        """Retrieve all intelligence principles as formatted text for system prompts.
+
+        Returns:
+            Formatted principles string ready for injection into prompts
+        """
+        results = await self.db.search(
+            query="intelligence principles rules",
+            n_results=10,
+            filter_metadata={"type": "intelligence_principle"}
+        )
+
+        if not results:
+            return ""
+
+        # Sort by principle key for consistent ordering
+        results.sort(key=lambda r: r["metadata"].get("principle_key", ""))
+
+        parts = ["CORE INTELLIGENCE — THINK, DON'T PARROT:",
+                 "You are a Digital Twin — an intelligent extension of the user, not a command executor.",
+                 "Your job is to UNDERSTAND what the user means, then act on the MEANING — not the literal words.\n"]
+
+        for i, r in enumerate(results, 1):
+            name = r["metadata"].get("name", "")
+            parts.append(f"{i}. {r['text'].split(chr(10), 1)[-1] if chr(10) in r['text'] else r['text']}")
+            parts.append("")
+
+        return "\n".join(parts)

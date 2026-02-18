@@ -115,8 +115,16 @@ Models: Claude Opus/Sonnet/Haiku + SmolLM2 (local fallback)"""
         if config.self_build_mode:
             logger.info("🧠 Also initializing DigitalCloneBrain for conversations...")
             digital_brain = DigitalCloneBrain(config.digital_clone_brain_path)
+            core_brain = brain  # CoreBrain for principles + build knowledge
         else:
             digital_brain = brain  # Already a DigitalCloneBrain
+            # Still need CoreBrain for intelligence principles
+            from src.core.brain.core_brain import CoreBrain as CoreBrainClass
+            core_brain = CoreBrainClass(config.core_brain_path)
+
+        # Store intelligence principles in CoreBrain (idempotent — uses doc_id)
+        logger.info("🧠 Loading intelligence principles into CoreBrain...")
+        await core_brain.store_intelligence_principles()
 
         # Initialize monitoring systems
         logger.info("📊 Initializing monitoring systems...")
@@ -135,9 +143,8 @@ Models: Claude Opus/Sonnet/Haiku + SmolLM2 (local fallback)"""
         logger.info("🤖 Initializing autonomous agent...")
         agent = AutonomousAgent(config, brain)
         agent.start_time = datetime.now()  # Track start time for uptime
-        agent.digital_brain = digital_brain  # For ConversationManager to use
-        if config.self_build_mode:
-            agent.core_brain = brain  # CoreBrain for build tasks
+        agent.digital_brain = digital_brain   # Conversation memories, preferences, contacts
+        agent.core_brain = core_brain         # Intelligence principles, build knowledge, patterns
 
         # Initialize sub-agent spawner
         api_client = AnthropicClient(config.api_key)
