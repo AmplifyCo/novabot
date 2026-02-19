@@ -7,7 +7,9 @@ import sys
 sys.path.insert(0, os.getcwd())
 
 try:
+    import litellm
     from litellm import acompletion
+    litellm.set_verbose = True  # Force debug logging
 except ImportError:
     print("Please install litellm first: pip install litellm")
     sys.exit(1)
@@ -16,10 +18,22 @@ async def check_version():
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
         print("Error: GEMINI_API_KEY not set in environment.")
-        print("Run: export GEMINI_API_KEY=your_key_here")
         return
 
-    print("Querying generic alias 'gemini/gemini-pro-latest'...")
+    # Test 1: Connectivity check with Flash
+    print("\n--- Test 1: Connectivity (Gemini Flash) ---")
+    try:
+        response = await acompletion(
+            model="gemini/gemini-2.0-flash",
+            messages=[{"role": "user", "content": "Hi"}]
+        )
+        print("Success! Connection works.")
+    except Exception as e:
+        print(f"Connectivity failed: {e}")
+        return
+
+    # Test 2: Alias check
+    print("\n--- Test 2: Alias Resolution (gemini-pro-latest) ---")
     try:
         response = await acompletion(
             model="gemini/gemini-pro-latest",
