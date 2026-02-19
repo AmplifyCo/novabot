@@ -14,6 +14,8 @@ Supports:
 import os
 import json
 import logging
+import asyncio
+import time
 from dataclasses import dataclass, field
 from typing import List, Dict, Any, Optional
 
@@ -214,6 +216,11 @@ class GeminiClient:
         try:
             import litellm
             litellm.suppress_debug_info = True
+            from litellm.exceptions import RateLimitError
+
+            # Retry configuration
+            max_retries = 3
+            base_delay = 2.0  # Start with 2s delay
 
             # Build messages for LiteLLM
             litellm_messages = []
@@ -241,7 +248,22 @@ class GeminiClient:
             if tools:
                 call_kwargs["tools"] = self._convert_tools_for_litellm(tools)
 
-            response = await litellm.acompletion(**call_kwargs)
+            # Retry Loop
+            last_exception = None
+            for attempt in range(max_retries + 1):
+                try:
+                    response = await litellm.acompletion(**call_kwargs)
+                    break # Success
+                except Exception as e:
+                    last_exception = e
+                    is_rate_limit = "429" in str(e) or "Resource exhausted" in str(e) or isinstance(e, RateLimitError)
+                    
+                    if is_rate_limit and attempt < max_retries:
+                        delay = base_delay * (2 ** attempt) # 2s, 4s, 8s
+                        logger.warning(f"Gemini Rate Limit ({model}). Retrying in {delay}s... (Attempt {attempt+1}/{max_retries})")
+                        await asyncio.sleep(delay)
+                    else:
+                        raise e # Re-raise if not rate limit or max retries exceeded
 
             choice = response.choices[0]
             message = choice.message
