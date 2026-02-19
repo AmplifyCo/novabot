@@ -271,13 +271,16 @@ Models: Claude Opus/Sonnet/Haiku + SmolLM2 (local fallback)"""
             # Initialize ModelRouter for intelligent model selection
             model_router = ModelRouter(config)
 
-            # Initialize Gemini client (optional — reduces Claude API usage)
+            # Initialize unified LiteLLM client (routes both Gemini + Claude)
             import os
             gemini_api_key = os.getenv("GEMINI_API_KEY", "")
-            gemini_client = GeminiClient(gemini_api_key) if gemini_api_key else None
+            gemini_client = GeminiClient(
+                api_key=gemini_api_key,
+                anthropic_api_key=config.api_key  # Claude calls also go through LiteLLM
+            ) if gemini_api_key else None
             if gemini_client:
-                logger.info("✨ Gemini Flash enabled — intent parsing + simple chat + fallback")
-                agent.gemini_client = gemini_client  # Enable Gemini fallback in agent loop
+                logger.info("✨ LiteLLM unified routing enabled — Gemini Flash + Claude Sonnet")
+                agent.gemini_client = gemini_client
 
             # Initialize Semantic Router (fast-path intent classification)
             semantic_router = SemanticRouter()

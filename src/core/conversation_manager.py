@@ -424,12 +424,41 @@ class ConversationManager:
             else:
                 raise
 
+    # ── Model tier classification ────────────────────────────────────
+    # Keywords that indicate simple tool tasks → Gemini Flash
+    _FLASH_KEYWORDS = [
+        "remind", "reminder", "alarm", "timer",
+        "contact", "save contact", "search contact",
+        "what time", "clock", "current time",
+        "send whatsapp", "text ", "message ",
+        "calendar", "schedule", "event",
+        "list email", "read email", "check email", "delete email",
+        "list reminder", "cancel reminder",
+    ]
+    # Keywords that indicate email compose → quality tier (Claude + retry + Gemini Pro)
+    _QUALITY_KEYWORDS = [
+        "compose", "draft", "write email", "send email", "email to",
+        "reply to email", "respond to email", "forward email",
+    ]
+
+    def _get_model_tier(self, message: str) -> str:
+        """Classify message into model tier: flash, sonnet, or quality."""
+        msg_lower = message.lower()
+        # Check quality first (email compose is a subset of email actions)
+        for kw in self._QUALITY_KEYWORDS:
+            if kw in msg_lower:
+                return "quality"
+        for kw in self._FLASH_KEYWORDS:
+            if kw in msg_lower:
+                return "flash"
+        return "sonnet"
+
     async def _execute_with_primary_model(
         self,
         intent: Dict[str, Any],
         message: str
     ) -> str:
-        """Execute task using primary model (Claude)."""
+        """Execute task using primary model — routes to correct tier via LiteLLM."""
         logger.info(f"Executing with primary model. Intent: {intent.get('action')}")
         
         # Extract PII map if present
@@ -471,7 +500,8 @@ class ConversationManager:
 
         elif action == "action":
             # Explicit or inferred action — needs tools
-            logger.info(f"Action - using agent with tools (inferred: {inferred_task or 'direct'})")
+            model_tier = self._get_model_tier(message)
+            logger.info(f"Action [{model_tier}] - using agent with tools (inferred: {inferred_task or 'direct'})")
             
             # Use inferred task if available (it might be more specific), otherwise original message
             task_to_run = inferred_task if inferred_task else message
@@ -482,7 +512,8 @@ class ConversationManager:
             response = await self.agent.run(
                 task=task_to_run,
                 system_prompt=system_prompt,
-                pii_map=pii_map
+                pii_map=pii_map,
+                model_tier=model_tier
             )
             return response
 

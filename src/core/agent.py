@@ -62,7 +62,8 @@ class AutonomousAgent:
         task: str,
         max_iterations: Optional[int] = None,
         system_prompt: Optional[str] = None,
-        pii_map: Optional[Dict[str, str]] = None
+        pii_map: Optional[Dict[str, str]] = None,
+        model_tier: str = "sonnet"
     ) -> str:
         """Execute task autonomously until completion.
 
@@ -70,6 +71,11 @@ class AutonomousAgent:
             task: Task description to execute
             max_iterations: Maximum iterations (defaults to config)
             system_prompt: Optional custom system prompt
+            pii_map: Optional PII token mapping for de-tokenization
+            model_tier: Model routing tier:
+                - "flash": Gemini Flash (simple tools — reminders, contacts, clock)
+                - "sonnet": Claude Sonnet (default — complex tasks, questions)
+                - "quality": Claude Sonnet with retry, fallback to Gemini Pro (email compose)
 
         Returns:
             Final result as string
@@ -78,13 +84,15 @@ class AutonomousAgent:
 
         # Store current task for semantic validation (Layer 11)
         self._current_task = task
+        self._model_tier = model_tier
 
         # Reset state machine + policy gate for new run
         self.state_machine.reset()
         self.tools.policy_gate.reset_run_counts()
         self.state_machine.transition(AgentState.THINKING, task[:80])
 
-        logger.info(f"Starting autonomous execution: {task}")
+        tier_label = {"flash": "⚡ Gemini Flash", "sonnet": "🧠 Claude Sonnet", "quality": "✍️ Claude Quality"}.get(model_tier, model_tier)
+        logger.info(f"Starting autonomous execution [{tier_label}]: {task}")
         logger.info(f"Max iterations: {max_iterations}")
 
         # Load context from brain if available
@@ -118,13 +126,14 @@ class AutonomousAgent:
                     self.state_machine.reset()
                     return "Task cancelled."
 
-                # Call LLM (Claude primary, Gemini fallback)
+                # Call LLM — all calls go through LiteLLM
                 self.state_machine.transition(AgentState.THINKING)
                 response = await self._call_llm(
                     messages=messages,
                     tools=self.tools.get_tool_definitions(),
                     system_prompt=system_prompt,
-                    max_tokens=4096
+                    max_tokens=4096,
+                    model_tier=model_tier
                 )
 
                 # Process response
@@ -179,7 +188,7 @@ class AutonomousAgent:
 
                 # Rate limit — wait and retry instead of crashing
                 if "429" in error_str or "rate_limit" in error_str:
-                    wait_time = min(60 * (2 ** (iteration - 1)), 300)  # Exponential backoff, max 5 min
+                    wait_time = min(60 * (2 ** (iteration - 1)), 300)
                     logger.warning(f"Rate limited. Waiting {wait_time}s before retry...")
                     await asyncio.sleep(wait_time)
                     continue
@@ -201,45 +210,106 @@ class AutonomousAgent:
         self.state_machine.reset()
         return final_result or "Task completed"
 
+    # ── Model tier constants ──────────────────────────────────────────
+    MODEL_GEMINI_FLASH = "gemini/gemini-2.0-flash"
+    MODEL_CLAUDE_SONNET = "anthropic/claude-sonnet-4-5"
+    MODEL_GEMINI_PRO = "gemini/gemini-2.5-pro-preview-05-06"
+
     async def _call_llm(
         self,
         messages: List[Dict[str, Any]],
         tools: List[Dict[str, Any]],
         system_prompt: str,
-        max_tokens: int = 4096
+        max_tokens: int = 4096,
+        model_tier: str = "sonnet"
     ):
-        """Call LLM with automatic Gemini fallback.
+        """Route LLM call through LiteLLM based on model tier.
 
-        Tries Claude first. If Claude fails (rate limit, API error),
-        falls back to Gemini via LiteLLM seamlessly.
+        All calls go through LiteLLM for unified provider management.
+
+        Tiers:
+            flash:   Gemini Flash primary → Claude Sonnet fallback
+            sonnet:  Claude Sonnet primary → Gemini Flash fallback
+            quality: Claude Sonnet → retry with wait → Gemini Pro fallback
         """
-        try:
+        has_litellm = self.gemini_client and self.gemini_client.enabled
+
+        if not has_litellm:
+            # No LiteLLM — use direct Anthropic client
             return await self.api_client.create_message(
                 model=self.config.default_model,
-                messages=messages,
-                tools=tools,
-                system=system_prompt,
-                max_tokens=max_tokens
+                messages=messages, tools=tools,
+                system=system_prompt, max_tokens=max_tokens
             )
-        except Exception as claude_error:
-            error_str = str(claude_error)
-            is_rate_limit = "429" in error_str or "rate_limit" in error_str
-            is_api_error = "overloaded" in error_str or "500" in error_str or "529" in error_str
 
-            if (is_rate_limit or is_api_error) and self.gemini_client and self.gemini_client.enabled:
-                logger.warning(f"⚡ Claude failed ({error_str[:80]}), falling back to Gemini...")
+        if model_tier == "flash":
+            # ── Gemini Flash primary (simple tools) ──
+            try:
+                logger.info("⚡ LiteLLM → Gemini Flash")
+                return await self.gemini_client.create_message(
+                    model=self.MODEL_GEMINI_FLASH,
+                    messages=messages, tools=tools,
+                    system=system_prompt, max_tokens=max_tokens
+                )
+            except Exception as e:
+                logger.warning(f"Gemini Flash failed ({str(e)[:60]}), trying Claude...")
+                return await self.gemini_client.create_message(
+                    model=self.MODEL_CLAUDE_SONNET,
+                    messages=messages, tools=tools,
+                    system=system_prompt, max_tokens=max_tokens
+                )
+
+        elif model_tier == "quality":
+            # ── Claude Sonnet primary → retry → Gemini Pro (email compose) ──
+            for attempt in range(2):
                 try:
+                    logger.info(f"✍️ LiteLLM → Claude Sonnet (quality, attempt {attempt + 1})")
                     return await self.gemini_client.create_message(
-                        model="gemini/gemini-2.0-flash",
-                        messages=messages,
-                        tools=tools,
-                        system=system_prompt,
-                        max_tokens=max_tokens
+                        model=self.MODEL_CLAUDE_SONNET,
+                        messages=messages, tools=tools,
+                        system=system_prompt, max_tokens=max_tokens
                     )
-                except Exception as gemini_error:
-                    logger.error(f"Gemini fallback also failed: {gemini_error}")
-                    raise claude_error  # Raise original error
-            else:
+                except Exception as e:
+                    error_str = str(e)
+                    if attempt == 0 and ("429" in error_str or "rate_limit" in error_str or "overloaded" in error_str):
+                        logger.warning(f"Claude rate-limited, waiting 30s before retry...")
+                        await asyncio.sleep(30)
+                        continue
+                    # Final attempt failed — fall back to Gemini Pro
+                    logger.warning(f"Claude failed after retry ({error_str[:60]}), using Gemini Pro...")
+                    try:
+                        return await self.gemini_client.create_message(
+                            model=self.MODEL_GEMINI_PRO,
+                            messages=messages, tools=tools,
+                            system=system_prompt, max_tokens=max_tokens
+                        )
+                    except Exception as pro_error:
+                        logger.error(f"Gemini Pro also failed: {pro_error}")
+                        raise e
+
+        else:
+            # ── Claude Sonnet primary → Gemini Flash fallback (default) ──
+            try:
+                logger.info("🧠 LiteLLM → Claude Sonnet")
+                return await self.gemini_client.create_message(
+                    model=self.MODEL_CLAUDE_SONNET,
+                    messages=messages, tools=tools,
+                    system=system_prompt, max_tokens=max_tokens
+                )
+            except Exception as e:
+                error_str = str(e)
+                is_retriable = "429" in error_str or "rate_limit" in error_str or "overloaded" in error_str or "500" in error_str
+                if is_retriable:
+                    logger.warning(f"⚡ Claude failed ({error_str[:60]}), falling back to Gemini Flash...")
+                    try:
+                        return await self.gemini_client.create_message(
+                            model=self.MODEL_GEMINI_FLASH,
+                            messages=messages, tools=tools,
+                            system=system_prompt, max_tokens=max_tokens
+                        )
+                    except Exception as flash_error:
+                        logger.error(f"Gemini Flash also failed: {flash_error}")
+                        raise e
                 raise
 
     async def _summarize_with_fallback(

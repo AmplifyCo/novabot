@@ -55,23 +55,31 @@ class GeminiResponse:
 
 
 class GeminiClient:
-    """LiteLLM-based Gemini client with Anthropic-compatible response format."""
+    """LiteLLM-based unified LLM client — routes to both Gemini and Claude.
 
-    def __init__(self, api_key: str):
-        """Initialize Gemini client.
+    All LLM calls go through LiteLLM for seamless provider switching.
+    Model strings: "gemini/gemini-2.0-flash", "anthropic/claude-sonnet-4-5", etc.
+    """
+
+    def __init__(self, api_key: str, anthropic_api_key: str = ""):
+        """Initialize LiteLLM client.
 
         Args:
             api_key: Google AI API key (from aistudio.google.com/apikey)
+            anthropic_api_key: Anthropic API key (for Claude via LiteLLM)
         """
         self.api_key = api_key
         self.enabled = bool(api_key)
 
         if self.enabled:
-            # LiteLLM reads GEMINI_API_KEY from environment
             os.environ["GEMINI_API_KEY"] = api_key
-            logger.info("✨ Gemini Flash client initialized (intent + chat + tool fallback)")
+            logger.info("✨ LiteLLM client initialized (Gemini + Claude routing)")
         else:
-            logger.info("Gemini client disabled (no GEMINI_API_KEY)")
+            logger.info("LiteLLM client disabled (no GEMINI_API_KEY)")
+
+        # Also set Anthropic key so LiteLLM can route Claude calls
+        if anthropic_api_key:
+            os.environ["ANTHROPIC_API_KEY"] = anthropic_api_key
 
     def _convert_tools_for_litellm(self, tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Convert Anthropic tool format to OpenAI/LiteLLM function format.
