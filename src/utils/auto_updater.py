@@ -61,8 +61,7 @@ class AutoUpdater:
         logger.info("🔍 Starting daily update check...")
 
         try:
-            # 1. Scan for vulnerabilities
-            await self._notify("🔍 Scanning for vulnerabilities...")
+            # 1. Scan for vulnerabilities (silent — only notify if issues found)
             python_vulns = await self.scanner.scan_python_packages()
             system_updates = await self.scanner.scan_system_packages()
 
@@ -85,11 +84,9 @@ class AutoUpdater:
             if updates_applied and self.auto_restart:
                 await self._restart_agent()
 
-            # 6. Final notification
+            # 6. Final notification (only if something actually changed)
             if updates_applied:
                 await self._notify("✅ Auto-update completed successfully", "success")
-            else:
-                await self._notify("✅ All packages up-to-date", "info")
 
             self.last_update = datetime.now()
 
@@ -273,6 +270,11 @@ class AutoUpdater:
             system_updates: System updates available
         """
         if not self.notify_telegram or not self.telegram or not self.telegram.enabled:
+            return
+
+        # Only send report if there are actual issues to report
+        if not python_vulns and not system_updates:
+            logger.info("Security scan clean — no notification sent")
             return
 
         # Build report message

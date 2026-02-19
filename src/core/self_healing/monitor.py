@@ -38,6 +38,7 @@ class SelfHealingMonitor:
 
         self.is_running = False
         self.last_check = None
+        self.startup_time = None
         self.total_errors_detected = 0
         self.total_fixes_attempted = 0
 
@@ -50,15 +51,8 @@ class SelfHealingMonitor:
             return
 
         self.is_running = True
+        self.startup_time = datetime.now()
         logger.info("🩺 Self-healing monitor started")
-
-        if self.telegram:
-            await self.telegram.notify(
-                "🩺 *Self-Healing Monitor Active*\n\n"
-                f"Checking for errors every {self.check_interval // 60} minutes.\n"
-                f"Auto-fix: {'Enabled' if self.auto_fix_enabled else 'Disabled'}",
-                level="info"
-            )
 
         # Run monitoring loop
         while self.is_running:
@@ -79,8 +73,11 @@ class SelfHealingMonitor:
         self.last_check = datetime.now()
         logger.info("Running health check...")
 
-        # Scan for recent errors
-        errors = self.detector.scan_recent_logs(minutes=self.check_interval // 60)
+        # Scan for recent errors (never before startup — avoids re-detecting pre-restart errors)
+        errors = self.detector.scan_recent_logs(
+            minutes=self.check_interval // 60,
+            not_before=self.startup_time
+        )
 
         if not errors:
             logger.info("✅ No errors detected")

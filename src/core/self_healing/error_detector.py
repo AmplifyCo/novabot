@@ -117,11 +117,12 @@ class ErrorDetector:
 
         logger.info(f"ErrorDetector initialized, monitoring: {log_file}")
 
-    def scan_recent_logs(self, minutes: int = 5) -> List[DetectedError]:
+    def scan_recent_logs(self, minutes: int = 5, not_before=None) -> List[DetectedError]:
         """Scan recent log entries for errors.
 
         Args:
             minutes: How many minutes back to scan
+            not_before: Optional datetime floor — ignore errors before this time
 
         Returns:
             List of detected errors
@@ -132,6 +133,9 @@ class ErrorDetector:
 
         errors = []
         cutoff_time = datetime.now() - timedelta(minutes=minutes)
+        # Never report errors that pre-date our startup (avoids re-detecting pre-restart crashes)
+        if not_before and not_before > cutoff_time:
+            cutoff_time = not_before
 
         try:
             with open(self.log_file, 'r') as f:

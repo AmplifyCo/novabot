@@ -59,12 +59,6 @@ class TelegramChannel:
             await self.bot.set_webhook(url=self.webhook_url)
             logger.info(f"✅ Telegram webhook set: {self.webhook_url}")
 
-            await self.send_message(
-                "🤖 **Agent Connected!**\n\n"
-                "Using intelligent multi-model routing with Brain-based context.\n\n"
-                "Try: What's your status?"
-            )
-
             return True
 
         except Exception as e:
