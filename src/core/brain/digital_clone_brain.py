@@ -27,6 +27,7 @@ preferences, and knowledge of people stays consistent everywhere.
 import json
 import logging
 from datetime import datetime
+from pathlib import Path
 from typing import Dict, Any, List, Optional
 from cryptography.fernet import Fernet
 from .vector_db import VectorDatabase
@@ -57,6 +58,12 @@ class DigitalCloneBrain:
 
     def __init__(self, path: str = "data/digital_clone_brain"):
         self.path = path
+
+        # ============================================================
+        # JSONL BACKUP — reliable file-based memory backup
+        # ============================================================
+        self._backup_file = Path("data/brain_backup.jsonl")
+        self._backup_file.parent.mkdir(parents=True, exist_ok=True)
 
         # ============================================================
         # COLLECTIVE CONSCIOUSNESS — shared across all talents
@@ -97,6 +104,9 @@ class DigitalCloneBrain:
         logger.info("  Collective: identity, preferences, contacts")
         logger.info("  Contexts: isolated per-talent (lazy-loaded)")
 
+        # Auto-restore from JSONL backup if ChromaDB was wiped
+        self._auto_restore_from_backup()
+
     def _get_context(self, talent: str) -> VectorDatabase:
         """Get or create an isolated context for a talent.
 
@@ -121,6 +131,93 @@ class DigitalCloneBrain:
         return None
 
     # ================================================================
+    # JSONL BACKUP — reliable file-based memory backup
+    # ================================================================
+
+    def _append_to_backup(self, record_type: str, data: Dict[str, Any]):
+        """Append a record to the JSONL backup file."""
+        try:
+            entry = {
+                "type": record_type,
+                "timestamp": datetime.now().isoformat(),
+                **data
+            }
+            with open(self._backup_file, "a", encoding="utf-8") as f:
+                f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        except Exception as e:
+            logger.warning(f"Failed to write JSONL backup: {e}")
+
+    def _auto_restore_from_backup(self):
+        """Restore brain data from JSONL backup if ChromaDB collections were wiped."""
+        if not self._backup_file.exists():
+            return
+
+        # Check if ChromaDB has data
+        identity_count = self.identity.count()
+        prefs_count = self.preferences.count()
+        contacts_count = self.contacts.count()
+
+        if identity_count > 0 and prefs_count > 0:
+            logger.info(f"ChromaDB has data (identity={identity_count}, prefs={prefs_count}, contacts={contacts_count}), skipping restore")
+            return
+
+        # ChromaDB is empty — restore from backup
+        logger.info("ChromaDB appears empty, restoring from JSONL backup...")
+        restored = {"identity": 0, "preference": 0, "contact": 0}
+
+        try:
+            with open(self._backup_file, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        record = json.loads(line)
+                        rtype = record.get("type", "")
+
+                        if rtype == "identity":
+                            doc_id = record.get("doc_id")
+                            text = record.get("text", "")
+                            metadata = record.get("metadata", {})
+                            if text:
+                                import asyncio
+                                asyncio.get_event_loop().run_until_complete(
+                                    self.identity.store(text=text, metadata=metadata, doc_id=doc_id)
+                                )
+                                restored["identity"] += 1
+
+                        elif rtype == "preference":
+                            text = record.get("text", "")
+                            metadata = record.get("metadata", {})
+                            if text:
+                                import asyncio
+                                asyncio.get_event_loop().run_until_complete(
+                                    self.preferences.store(text=text, metadata=metadata)
+                                )
+                                restored["preference"] += 1
+
+                        elif rtype == "contact":
+                            text = record.get("text", "")
+                            metadata = record.get("metadata", {})
+                            doc_id = record.get("doc_id")
+                            if text:
+                                import asyncio
+                                asyncio.get_event_loop().run_until_complete(
+                                    self.contacts.store(text=text, metadata=metadata, doc_id=doc_id)
+                                )
+                                restored["contact"] += 1
+
+                    except json.JSONDecodeError:
+                        continue
+                    except Exception as e:
+                        logger.debug(f"Failed to restore record: {e}")
+                        continue
+
+            logger.info(f"Restored from backup: {restored}")
+        except Exception as e:
+            logger.warning(f"Backup restore failed: {e}")
+
+    # ================================================================
     # COLLECTIVE — Identity & Style
     # ================================================================
 
@@ -131,14 +228,17 @@ class DigitalCloneBrain:
             sample: Sample text (email, tweet, chat message)
             context: Where this style applies (general, email, x, etc.)
         """
-        await self.identity.store(
-            text=sample,
-            metadata={
-                "type": "communication_style",
-                "context": context,
-                "timestamp": datetime.now().isoformat()
-            }
-        )
+        metadata = {
+            "type": "communication_style",
+            "context": context,
+            "timestamp": datetime.now().isoformat()
+        }
+        await self.identity.store(text=sample, metadata=metadata)
+
+        # JSONL backup
+        self._append_to_backup("identity", {
+            "text": sample, "metadata": metadata
+        })
         logger.info(f"Learned communication style ({context})")
 
     async def store_identity(self, aspect: str, description: str):
@@ -148,15 +248,19 @@ class DigitalCloneBrain:
             aspect: Identity aspect (e.g., "tone", "values", "expertise")
             description: Description of this aspect
         """
-        await self.identity.store(
-            text=f"{aspect}: {description}",
-            metadata={
-                "type": "identity",
-                "aspect": aspect,
-                "timestamp": datetime.now().isoformat()
-            },
-            doc_id=f"identity_{aspect.lower().replace(' ', '_')}"
-        )
+        text = f"{aspect}: {description}"
+        metadata = {
+            "type": "identity",
+            "aspect": aspect,
+            "timestamp": datetime.now().isoformat()
+        }
+        doc_id = f"identity_{aspect.lower().replace(' ', '_')}"
+        await self.identity.store(text=text, metadata=metadata, doc_id=doc_id)
+
+        # JSONL backup
+        self._append_to_backup("identity", {
+            "text": text, "metadata": metadata, "doc_id": doc_id
+        })
         logger.info(f"Stored identity aspect: {aspect}")
 
     # ================================================================
@@ -178,15 +282,19 @@ class DigitalCloneBrain:
             source: Origin — 'user_stated', 'llm_derived', or 'system'
             confidence: Confidence score 0.0-1.0 (user_stated should be 1.0)
         """
-        await self.preferences.store(
-            text=f"Preference in {category}: {preference}",
-            metadata={
-                "category": category,
-                "source": source,
-                "confidence": confidence,
-                "timestamp": datetime.now().isoformat()
-            }
-        )
+        text = f"Preference in {category}: {preference}"
+        metadata = {
+            "category": category,
+            "source": source,
+            "confidence": confidence,
+            "timestamp": datetime.now().isoformat()
+        }
+        await self.preferences.store(text=text, metadata=metadata)
+
+        # JSONL backup
+        self._append_to_backup("preference", {
+            "text": text, "metadata": metadata
+        })
         logger.info(f"Remembered preference: {category} - {preference} (source={source}, confidence={confidence})")
 
     # ================================================================
@@ -207,16 +315,20 @@ class DigitalCloneBrain:
             preferences: Dict of person's preferences
         """
         contact_id = name.lower().replace(" ", "_")
+        text = f"{name}: {relationship}. Preferences: {json.dumps(preferences)}"
+        metadata = {
+            "name": name,
+            "relationship": relationship,
+            **preferences
+        }
+        doc_id = f"contact_{contact_id}"
 
-        await self.contacts.store(
-            text=f"{name}: {relationship}. Preferences: {json.dumps(preferences)}",
-            metadata={
-                "name": name,
-                "relationship": relationship,
-                **preferences
-            },
-            doc_id=f"contact_{contact_id}"
-        )
+        await self.contacts.store(text=text, metadata=metadata, doc_id=doc_id)
+
+        # JSONL backup
+        self._append_to_backup("contact", {
+            "text": text, "metadata": metadata, "doc_id": doc_id
+        })
         logger.info(f"Remembered person: {name}")
 
     # ================================================================
