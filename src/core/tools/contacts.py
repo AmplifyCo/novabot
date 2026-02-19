@@ -18,7 +18,9 @@ from ..types import ToolResult
 logger = logging.getLogger(__name__)
 
 # Primary contacts storage (JSON file)
-CONTACTS_FILE = Path("data/contacts.json")
+# Resolve absolute path relative to this file: src/core/tools/contacts.py -> ... -> data/contacts.json
+_PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
+CONTACTS_FILE = _PROJECT_ROOT / "data" / "contacts.json"
 
 
 class ContactsTool(BaseTool):
@@ -71,7 +73,8 @@ class ContactsTool(BaseTool):
         """
         self.brain = digital_brain
         self._contacts = self._load_contacts()
-        logger.info(f"📇 Contacts loaded: {len(self._contacts)} from {CONTACTS_FILE}")
+        logger.info(f"📇 Contacts storage: {CONTACTS_FILE}")
+        logger.info(f"📇 Contacts loaded: {len(self._contacts)}")
 
     # ── JSON File Operations (Primary Store) ────────────────────────────
 
