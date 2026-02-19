@@ -1398,6 +1398,11 @@ CONTACTS:
 
         base_prompt = self._cached_agent_system_prompt
 
+        # Inject live PST time into every prompt
+        from src.core.timezone import current_time_context
+        time_context = current_time_context()
+        base_prompt = f"{time_context}\n\nTIMEZONE: User is in US/Pacific (PST/PDT). Always interpret and display times in PST unless the user says they are traveling.\n\n{base_prompt}"
+
         # ADD BRAIN CONTEXT for continuity and knowledge
         # Uses channel for context isolation — each talent gets its own
         # isolated memory while sharing collective consciousness

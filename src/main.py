@@ -180,6 +180,12 @@ Models: Claude Opus/Sonnet/Haiku + SmolLM2 (local fallback)"""
         agent.tools.register(contacts_tool)
         logger.info("📇 ContactsTool registered")
 
+        # Register ClockTool (PST timezone clock)
+        from src.core.tools.clock import ClockTool
+        clock_tool = ClockTool()
+        agent.tools.register(clock_tool)
+        logger.info("🕐 ClockTool registered (PST)")
+
         # Initialize sub-agent spawner
         api_client = AnthropicClient(config.api_key)
         agent_factory = AgentFactory(api_client, config)

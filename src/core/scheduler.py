@@ -6,6 +6,7 @@ import logging
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import List, Dict, Any
+from .timezone import USER_TZ
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +57,7 @@ class ReminderScheduler:
         if not reminders:
             return
 
-        now = datetime.now()
+        now = datetime.now(USER_TZ)
         fired_any = False
 
         for reminder in reminders:
@@ -65,6 +66,8 @@ class ReminderScheduler:
 
             try:
                 remind_at = datetime.fromisoformat(reminder["remind_at"])
+                if remind_at.tzinfo is None:
+                    remind_at = remind_at.replace(tzinfo=USER_TZ)
             except (ValueError, KeyError):
                 continue
 
@@ -96,7 +99,7 @@ class ReminderScheduler:
         if not reminders:
             return
 
-        cutoff = datetime.now() - timedelta(days=self.CLEANUP_AFTER_DAYS)
+        cutoff = datetime.now(USER_TZ) - timedelta(days=self.CLEANUP_AFTER_DAYS)
         original_count = len(reminders)
 
         reminders = [

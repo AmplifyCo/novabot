@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional, List, Dict, Any
 from .base import BaseTool
+from ..timezone import USER_TZ
 from ..types import ToolResult
 
 logger = logging.getLogger(__name__)
@@ -96,7 +97,7 @@ class ReminderTool(BaseTool):
         if not remind_at:
             return ToolResult(success=False, error="remind_at is required. Use 'YYYY-MM-DD HH:MM' or relative like '30m', '2h', '1d'")
 
-        now = datetime.now()
+        now = datetime.now(USER_TZ)
 
         # Try relative time first (e.g. "30m", "2h", "1d", "90s", "1h30m")
         remind_dt = self._parse_relative_time(remind_at.strip(), now)
@@ -104,10 +105,12 @@ class ReminderTool(BaseTool):
         if not remind_dt:
             # Try absolute datetime
             try:
-                remind_dt = datetime.strptime(remind_at.strip(), "%Y-%m-%d %H:%M")
+                remind_dt = datetime.strptime(remind_at.strip(), "%Y-%m-%d %H:%M").replace(tzinfo=USER_TZ)
             except ValueError:
                 try:
                     remind_dt = datetime.fromisoformat(remind_at.strip())
+                    if remind_dt.tzinfo is None:
+                        remind_dt = remind_dt.replace(tzinfo=USER_TZ)
                 except ValueError:
                     return ToolResult(
                         success=False,
@@ -184,7 +187,7 @@ class ReminderTool(BaseTool):
         for r in reminders:
             if r.get("id") == reminder_id and r.get("status") == "pending":
                 r["status"] = "cancelled"
-                r["cancelled_at"] = datetime.now().isoformat()
+                r["cancelled_at"] = datetime.now(USER_TZ).isoformat()
                 found = True
                 break
 
