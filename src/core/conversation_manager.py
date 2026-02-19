@@ -623,21 +623,21 @@ class ConversationManager:
                 logger.warning(f"Claude unavailable, falling back to Gemini Flash: {error}")
                 self._last_model_used = "gemini-flash-fallback"
 
-                # Build a simple system prompt (Brain principles, no tool context)
-                system = await self._get_chat_system_prompt(message) if hasattr(self, '_get_chat_system_prompt') else None
-                if not system and self._cached_chat_system_prompt:
-                    system = self._cached_chat_system_prompt
-
-                response = await self.gemini_client.create_message(
-                    model=self.router.gemini_model,
-                    messages=[{"role": "user", "content": message}],
-                    system=system,
-                    max_tokens=500,
+                # Use Agent with "flash" tier -> enables tools with Gemini
+                # We interpret the message as a task
+                logger.info("Executing with Gemini Flash (Agent mode w/ tools)")
+                
+                # Limit iterations to prevent loops if tools fail
+                response_text = await self.agent.run(
+                    task=message,
+                    model_tier="flash",
+                    max_iterations=5,
+                    system_prompt=None  # Let agent build standard prompt with tools
                 )
-                text = response.content[0].text
+                
                 error_type = "Rate limit" if "429" in str(error) else "API issue"
-                warning = f"⚠️ *{error_type}* — using Gemini Flash (no tools in this mode)\n\n---\n"
-                return warning + text
+                warning = f"⚠️ *{error_type}* — using Gemini Flash fallback\n\n---\n"
+                return warning + response_text
             except Exception as gemini_error:
                 logger.error(f"Gemini fallback also failed: {gemini_error}")
                 # Fall through to local model
