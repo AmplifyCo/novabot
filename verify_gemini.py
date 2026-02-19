@@ -56,7 +56,18 @@ async def check_version():
             print("No model ID in response.")
         
     except Exception as e:
-        print(f"\nError: {e}")
+        print(f"\nError with gemini-pro-latest: {e}")
+
+    # Test 3: Try explicit 1.5-pro
+    print("\n--- Test 3: Explicit gemini-1.5-pro-latest ---")
+    try:
+        response = await acompletion(
+            model="gemini/gemini-1.5-pro-latest",
+            messages=[{"role": "user", "content": "Hi"}]
+        )
+        print(f"Success! Response: {response.choices[0].message.content}")
+    except Exception as e:
+        print(f"Error with 1.5-pro-latest: {e}")
 
 if __name__ == "__main__":
     asyncio.run(check_version())
