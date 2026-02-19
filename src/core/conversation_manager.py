@@ -402,20 +402,10 @@ class ConversationManager:
             Response string
         """
         action = intent.get("action", "unknown")
-        inferred_task = intent.get("inferred_task")
-        conversation_history = intent.get("_conversation_history", "")
 
-        # Build the task description for the agent
-        # Include recent conversation history so the agent understands context
-        # (e.g. "yes" after "Want me to delete those 3 emails?" makes sense with history)
-        context_prefix = ""
-        if conversation_history:
-            context_prefix = f"RECENT CONVERSATION (for context):\n{conversation_history}\n\n---\n"
-
-        if inferred_task:
-            agent_task = f"{context_prefix}User said: \"{message}\"\n\nTask: {inferred_task}"
-        else:
-            agent_task = f"{context_prefix}User request: {message}"
+        # Build enriched execution plan:
+        # Intent (what to do) + Tool hints (which tools) + Memory (context) → agent task
+        agent_task = await self._build_execution_plan(intent, message)
 
         if action == "build_feature":
             # Always use Opus architect
@@ -837,7 +827,8 @@ User says "good morning" → none"""
         # PRIMARY: Claude Haiku (fast, cheap, accurate, context-aware)
         try:
             result = await self._parse_intent(message, conversation_history)
-            logger.info(f"Haiku intent: {result['action']} (confidence: {result['confidence']}, inferred: {result.get('inferred_task', 'none')})")
+            tools_str = ",".join(result.get("tool_hints", [])) or "none"
+            logger.info(f"Intent: {result['action']} (confidence: {result['confidence']}, task: {result.get('inferred_task', 'none')}, tools: {tools_str})")
             # Attach history so _execute_with_primary_model can include it in agent context
             result["_conversation_history"] = conversation_history
             return result
@@ -921,9 +912,14 @@ RECENT CONVERSATION (use this to understand context):
 {conversation_history}
 ---"""
 
-            intent_prompt = f"""Intent classifier. Map user message to the right intent and tool.
+            intent_prompt = f"""Intent classifier. Map user message to the right intent and tools.
 {tool_context}{history_context}
-Return EXACTLY: intent|confidence|inferred_task
+Return EXACTLY: intent|confidence|inferred_task|tools
+
+- intent: one of the intent names below
+- confidence: high / medium / low
+- inferred_task: concise description of what to do, or "none"
+- tools: comma-separated tool names from AVAILABLE TOOLS that will be needed, or "none"
 
 Intents:
 - action: needs a tool to execute (email, calendar, bash, file, web, search, post, reminder, etc.)
@@ -937,23 +933,30 @@ KEY RULE — question vs action:
 "question" = Claude can answer from its own knowledge, no external data needed
 "action" = requires fetching live data OR using a tool → classify as action even if phrased as a question
 
+TOOL MAPPING RULE:
+For action intents, list the specific tools needed from AVAILABLE TOOLS above.
+Multiple tools allowed (e.g. email_list,email_send for "reply to unread emails").
+Use "none" only when no tool applies.
+
 Examples:
-"Post on X: AI is the future" → action|high|Post exact: AI is the future
-"Check my email" → action|high|Check inbox for new messages
-"Any unread emails?" → action|high|Check inbox for unread emails
-"Do I have messages?" → action|high|Check inbox for new messages
-"What's in my inbox?" → action|high|Check inbox for new messages
-"Any meetings today?" → action|high|Check calendar for today's events
-"What's on my calendar?" → action|high|Check calendar for upcoming events
-"Remind me to call John at 3pm" → action|high|Set reminder: call John at 3pm
-"Search for flights to NYC" → action|high|Search flights to NYC
-"yes" (after bot proposed deleting emails) → action|high|Delete the emails as proposed
-"do it" / "go ahead" / "confirm" → action|high|Execute the proposed action
-"Good morning!" → conversation|high|none
-"Call me boss" → conversation|high|none
-"What's the capital of France?" → question|high|none
-"How does photosynthesis work?" → question|high|none
-"Do the thing" (no context) → clarify|low|What would you like me to do?"""
+"Post on X: AI is the future" → action|high|Post exact: AI is the future|x_post
+"Check my email" → action|high|Check inbox for new messages|email_list
+"Any unread emails?" → action|high|Check inbox for unread emails|email_list
+"Do I have messages?" → action|high|Check inbox for new messages|email_list
+"What's in my inbox?" → action|high|Check inbox for new messages|email_list
+"Reply to John's email" → action|high|Reply to John's email|email_list,email_send
+"Any meetings today?" → action|high|Check calendar for today's events|calendar_list
+"What's on my calendar?" → action|high|Check calendar for upcoming events|calendar_list
+"Schedule a call with Sarah tomorrow at 2pm" → action|high|Create calendar event: call with Sarah tomorrow 2pm|calendar_create
+"Remind me to call John at 3pm" → action|high|Set reminder: call John at 3pm|reminder_set
+"Search for flights to NYC" → action|high|Search flights to NYC|web_search
+"yes" (after bot proposed deleting emails) → action|high|Delete the emails as proposed|email_delete
+"do it" / "go ahead" / "confirm" → action|high|Execute the proposed action|none
+"Good morning!" → conversation|high|none|none
+"Call me boss" → conversation|high|none|none
+"What's the capital of France?" → question|high|none|none
+"How does photosynthesis work?" → question|high|none|none
+"Do the thing" (no context) → clarify|low|What would you like me to do?|none"""
 
             response = await intent_client.create_message(
                 model=intent_model,
@@ -965,11 +968,12 @@ Examples:
             raw_response = response.content[0].text.strip()
             logger.debug(f"LLM raw intent response: {raw_response}")
 
-            # Parse "intent|confidence|inferred_task" format
-            parts = raw_response.split("|", 2)
+            # Parse "intent|confidence|inferred_task|tools" format (4 fields)
+            parts = raw_response.split("|", 3)
             intent_text = parts[0].strip().lower()
             confidence_text = parts[1].strip().lower() if len(parts) > 1 else "medium"
             inferred_task = parts[2].strip() if len(parts) > 2 else "none"
+            tool_hints_raw = parts[3].strip() if len(parts) > 3 else "none"
 
             # Map confidence words to numbers
             confidence_map = {"high": 0.9, "medium": 0.7, "low": 0.4}
@@ -978,6 +982,22 @@ Examples:
             # Clean up inferred task
             if inferred_task.lower() in ("none", "n/a", ""):
                 inferred_task = None
+
+            # Parse and validate tool hints against tool registry
+            tool_hints = []
+            if tool_hints_raw and tool_hints_raw.lower() not in ("none", "n/a", ""):
+                suggested = [t.strip() for t in tool_hints_raw.split(",") if t.strip()]
+                if hasattr(self.agent, 'tools'):
+                    try:
+                        available_tools = {t['name'] for t in self.agent.tools.get_tool_definitions()}
+                        tool_hints = [t for t in suggested if t in available_tools]
+                    except Exception:
+                        tool_hints = suggested  # Use as-is if registry lookup fails
+                else:
+                    tool_hints = suggested
+
+            if tool_hints:
+                logger.debug(f"Tool hints: {tool_hints}")
 
             intent_map = {
                 "build_feature": "build_feature",
@@ -995,6 +1015,8 @@ Examples:
                     result = {"action": action, "confidence": confidence, "parameters": {}}
                     if inferred_task:
                         result["inferred_task"] = inferred_task
+                    if tool_hints:
+                        result["tool_hints"] = tool_hints
                     return result
 
             # Unrecognized → conversation
@@ -1004,6 +1026,59 @@ Examples:
         except Exception as e:
             logger.debug(f"LLM intent parsing error: {e}")
             return {"action": "unknown", "confidence": 0.3, "parameters": {}}
+
+    async def _build_execution_plan(self, intent: Dict[str, Any], message: str) -> str:
+        """Enrich intent with memory context to build a comprehensive agent task.
+
+        Flow: Intent (what) + Tool hints (how) + Memory (who/when/prefs) → enriched task
+
+        Queries brain for relevant contacts, preferences, and conversation context
+        so the agent has what it needs without extra round-trips to the user.
+
+        Args:
+            intent: Parsed intent dict (action, inferred_task, tool_hints, _conversation_history)
+            message: Original user message
+
+        Returns:
+            Enriched task string ready for agent.run()
+        """
+        inferred_task = intent.get("inferred_task")
+        tool_hints = intent.get("tool_hints", [])
+        conversation_history = intent.get("_conversation_history", "")
+
+        # Build conversation context prefix
+        context_prefix = ""
+        if conversation_history:
+            context_prefix = f"RECENT CONVERSATION (for context):\n{conversation_history}\n\n---\n"
+
+        # Base task from inferred intent
+        if inferred_task:
+            task = f"{context_prefix}User said: \"{message}\"\n\nTask: {inferred_task}"
+        else:
+            task = f"{context_prefix}User request: {message}"
+
+        # Inject validated tool routing hints
+        if tool_hints:
+            task += f"\n\nUse these tools: {', '.join(tool_hints)}"
+
+        # Enrich with relevant memory (contacts, preferences, past context)
+        if self.brain and hasattr(self.brain, 'get_relevant_context'):
+            try:
+                query = inferred_task or message
+                channel = getattr(self, '_current_channel', None)
+                try:
+                    mem_context = await self.brain.get_relevant_context(
+                        query, max_results=2, channel=channel
+                    )
+                except TypeError:
+                    mem_context = await self.brain.get_relevant_context(query, max_results=2)
+
+                if mem_context:
+                    task += f"\n\nRELEVANT MEMORY:\n{mem_context}"
+            except Exception as e:
+                logger.debug(f"Memory enrichment skipped (non-critical): {e}")
+
+        return task
 
     async def _parse_intent_locally(self, message: str) -> Dict[str, Any]:
         """Parse intent using local LLM (better than keyword matching).
