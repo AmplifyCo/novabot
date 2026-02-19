@@ -2,6 +2,7 @@
 
 from typing import Dict, Any, Optional
 from .base import BaseTool
+from ..types import ToolResult
 import logging
 import asyncio
 import aiohttp
@@ -44,7 +45,7 @@ class WhatsAppTool(BaseTool):
             }
         }
 
-    async def execute(self, to: str, body: str, **kwargs) -> Dict[str, Any]:
+    async def execute(self, to: str, body: str, **kwargs) -> ToolResult:
         """Execute the tool.
 
         Args:
@@ -55,7 +56,7 @@ class WhatsAppTool(BaseTool):
             Result dictionary
         """
         if not self.enabled:
-            return {"success": False, "error": "WhatsApp tool disabled (missing credentials)"}
+            return ToolResult(success=False, error="WhatsApp tool disabled (missing credentials)")
 
         # Meta API requires clean numbers (no + usually, but depends on region)
         # Stripping + just in case, but usually CountryCode + Number is required.
@@ -80,18 +81,18 @@ class WhatsAppTool(BaseTool):
                     
                     if resp.status == 200:
                         logger.info(f"📤 WhatsApp tool sent to {clean_to}")
-                        return {
-                            "success": True, 
-                            "output": f"Message sent to {clean_to}",
-                            "message_id": resp_data.get("messages", [{}])[0].get("id")
-                        }
+                        return ToolResult(
+                            success=True, 
+                            output=f"Message sent to {clean_to}",
+                            metadata={"message_id": resp_data.get("messages", [{}])[0].get("id")}
+                        )
                     else:
                         logger.error(f"WhatsApp tool failed: {resp.status} {resp_data}")
-                        return {
-                            "success": False, 
-                            "error": f"API Error: {resp_data.get('error', {}).get('message')}"
-                        }
+                        return ToolResult(
+                            success=False, 
+                            error=f"API Error: {resp_data.get('error', {}).get('message')}"
+                        )
 
         except Exception as e:
             logger.error(f"WhatsApp tool error: {e}")
-            return {"success": False, "error": str(e)}
+            return ToolResult(success=False, error=str(e))
