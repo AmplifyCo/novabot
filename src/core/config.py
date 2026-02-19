@@ -35,10 +35,10 @@ def load_config(env_file: str = ".env", config_file: str = "config/agent.yaml") 
     config = AgentConfig(
         # API - Multi-tier model configuration
         api_key=os.getenv("ANTHROPIC_API_KEY", ""),
-        default_model=os.getenv("DEFAULT_MODEL", models_config.get("default", "claude-opus-4-6")),
-        subagent_model=os.getenv("SUBAGENT_MODEL", models_config.get("subagent", "claude-sonnet-4-5")),
-        chat_model=os.getenv("CHAT_MODEL", models_config.get("chat", "claude-haiku-4-5")),
-        intent_model=os.getenv("INTENT_MODEL", models_config.get("intent", "claude-haiku-4-5")),
+        default_model=os.getenv("DEFAULT_MODEL", models_config.get("default", "gemini/gemini-2.0-flash")),
+        subagent_model=os.getenv("SUBAGENT_MODEL", models_config.get("subagent", "gemini/gemini-2.0-flash")),
+        chat_model=os.getenv("CHAT_MODEL", models_config.get("chat", "gemini/gemini-2.0-flash")),
+        intent_model=os.getenv("INTENT_MODEL", models_config.get("intent", "gemini/gemini-2.0-flash")),
 
         # Gemini (optional — intent + simple chat via LiteLLM)
         gemini_model=os.getenv("GEMINI_MODEL", yaml_config.get("agent", {}).get("models", {}).get("gemini_flash", "gemini/gemini-2.0-flash")),
@@ -93,7 +93,8 @@ def load_config(env_file: str = ".env", config_file: str = "config/agent.yaml") 
     )
 
     # Validate required fields
-    if not config.api_key:
-        raise ValueError("ANTHROPIC_API_KEY is required but not set in .env file")
+    # Validate required fields
+    if not config.api_key and not config.gemini_enabled:
+        raise ValueError("At least one API key (ANTHROPIC_API_KEY or GEMINI_API_KEY) is required")
 
     return config

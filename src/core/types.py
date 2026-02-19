@@ -35,15 +35,16 @@ class ToolResult:
 class AgentConfig:
     """Configuration for the autonomous agent."""
     # API
+    # API
     api_key: str
-    default_model: str = "claude-opus-4-6"  # Architect - complex planning
-    subagent_model: str = "claude-sonnet-4-5"  # Workers - implementation
-    chat_model: str = "claude-haiku-4-5"  # Chat - simple queries
-    intent_model: str = "claude-haiku-4-5"  # Intent parsing
+    default_model: str = "gemini/gemini-2.0-flash"  # Architect - complex planning
+    subagent_model: str = "gemini/gemini-2.0-flash"  # Workers - implementation
+    chat_model: str = "gemini/gemini-2.0-flash"  # Chat - simple queries
+    intent_model: str = "gemini/gemini-2.0-flash"  # Intent parsing
 
     # Gemini (optional, via LiteLLM — intent parsing + simple chat + fallback)
     gemini_model: str = "gemini/gemini-2.0-flash"
-    gemini_enabled: bool = False  # Auto-set True when GEMINI_API_KEY present
+    gemini_enabled: bool = True  # Enabled by default as primary
 
     # Local Models (optional, for CPU inference)
     local_model_enabled: bool = False
