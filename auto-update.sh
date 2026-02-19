@@ -90,9 +90,21 @@ if git pull origin main 2>&1 | tee -a "$LOG_FILE"; then
     "$SCRIPT_DIR/venv/bin/pip" install -r requirements.txt 2>&1 | tee -a "$LOG_FILE"
     
     # Ensure rights (if run as root/sudo but user owns dir)
-    if [ -n "$SUDO_USER" ]; then
-        chown -R "$SUDO_USER" "$SCRIPT_DIR/venv"
-    fi
+    # Ensure correct permissions (recursive)
+    # This prevents root-owned files from breaking the service
+    fix_permissions() {
+        # Only run if root
+        if [ "$(id -u)" -eq 0 ]; then
+            TARGET_USER="${SUDO_USER:-ec2-user}"
+            if id "$TARGET_USER" &>/dev/null; then
+                log "🔧 Fixing permissions for user: $TARGET_USER"
+                chown -R "$TARGET_USER:$TARGET_USER" "$SCRIPT_DIR"
+            else
+                log "⚠️  User $TARGET_USER not found, skipping chown"
+            fi
+        fi
+    }
+    trap fix_permissions EXIT
 
     # Update systemd service if changed
     SERVICE_FILE="digital-twin.service"
