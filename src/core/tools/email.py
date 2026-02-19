@@ -30,8 +30,8 @@ class EmailTool(BaseTool):
     parameters = {
         "operation": {
             "type": "string",
-            "description": "Operation: 'check_inbox', 'read_email', 'send_email', 'reply', 'search'",
-            "enum": ["check_inbox", "read_email", "send_email", "reply", "search"]
+            "description": "Operation: 'check_inbox', 'read_email', 'send_email', 'reply', 'search', 'delete_email', 'mark_unread'",
+            "enum": ["check_inbox", "read_email", "send_email", "reply", "search", "delete_email", "mark_unread"]
         },
         "to": {
             "type": "string",
@@ -122,6 +122,10 @@ class EmailTool(BaseTool):
                 return await self._reply_to_email(email_id, body)
             elif operation == "search":
                 return await self._search_emails(subject, limit)
+            elif operation == "delete_email":
+                return await self._delete_email(email_id)
+            elif operation == "mark_unread":
+                return await self._mark_unread(email_id)
             else:
                 return ToolResult(
                     success=False,
@@ -363,6 +367,57 @@ class EmailTool(BaseTool):
 
         except Exception as e:
             logger.error(f"Error searching emails: {e}")
+            return ToolResult(success=False, error=str(e))
+
+    async def _delete_email(self, email_id: str) -> ToolResult:
+        """Delete an email."""
+        try:
+            if not email_id:
+                return ToolResult(success=False, error="email_id required")
+
+            mail = imaplib.IMAP4_SSL(self.imap_server, self.imap_port)
+            mail.login(self.email_address, self.password)
+            mail.select('INBOX')
+
+            # Mark as deleted
+            mail.store(email_id.encode(), '+FLAGS', '\\Deleted')
+            mail.expunge()
+
+            mail.close()
+            mail.logout()
+
+            return ToolResult(
+                success=True,
+                output=f"🗑️ Deleted email {email_id}"
+            )
+
+        except Exception as e:
+            logger.error(f"Error deleting email: {e}")
+            return ToolResult(success=False, error=str(e))
+
+    async def _mark_unread(self, email_id: str) -> ToolResult:
+        """Mark an email as unread."""
+        try:
+            if not email_id:
+                return ToolResult(success=False, error="email_id required")
+
+            mail = imaplib.IMAP4_SSL(self.imap_server, self.imap_port)
+            mail.login(self.email_address, self.password)
+            mail.select('INBOX')
+
+            # Remove Seen flag to mark as unread
+            mail.store(email_id.encode(), '-FLAGS', '\\Seen')
+
+            mail.close()
+            mail.logout()
+
+            return ToolResult(
+                success=True,
+                output=f"envelope marked as unread: {email_id}"
+            )
+
+        except Exception as e:
+            logger.error(f"Error marking email unread: {e}")
             return ToolResult(success=False, error=str(e))
 
     def _decode_header(self, header_value: str) -> str:

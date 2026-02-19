@@ -136,5 +136,32 @@
       "nice"
     ],
     "tools": []
+  },
+  {
+    "intent": "action",
+    "examples": [
+      "delete this email",
+      "delete these emails",
+      "remove email",
+      "trash this message",
+      "delete selected",
+      "delete that"
+    ],
+    "tools": [
+      "email"
+    ]
+  },
+  {
+    "intent": "action",
+    "examples": [
+      "mark as unread",
+      "mark email unread",
+      "set to unread",
+      "flag as unread",
+      "mark that unread"
+    ],
+    "tools": [
+      "email"
+    ]
   }
 ]
