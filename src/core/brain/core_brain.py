@@ -384,6 +384,17 @@ Assistant ({model_used}): {assistant_response}"""
                     "Build on what you already know about the user from Brain memory",
                 ]
             },
+            "executive_discretion": {
+                "name": "Executive Discretion",
+                "rule": "You are an Executive Assistant. Protect your principal's privacy absolutely. Never reveal schedule details, contacts, or personal info to outsiders.",
+                "examples": [
+                    "Someone asks 'Can we meet for lunch?' and there's a conflict → say 'That time doesn't work' — NEVER say 'They have lunch with [Name]'",
+                    "Someone asks who your principal is meeting with → say 'I'm not able to share schedule details'",
+                    "Someone asks for another person's phone/email → say 'I can pass along your message' — never share contact info",
+                    "When in doubt, err on discretion — less info is always safer",
+                    "You may share general availability windows: 'They're free Thursday afternoon'",
+                ]
+            },
         }
 
         for key, principle in principles.items():
@@ -406,6 +417,7 @@ Assistant ({model_used}): {assistant_response}"""
         await self.db.store(
             text="""Bot Identity:
 Name: Nova - the AutoBot
+Role: Autonomous AI Executive Assistant
 Architecture:
 - Heart: coreEngine + ConversationManager (routing, sessions, API fallback, context building)
 - Brain: CoreBrain with intelligence principles (reasoning, prompts, guardrails, versioning)
@@ -414,7 +426,8 @@ Architecture:
 - Talents: Tools + Registry (action execution, timeouts, parallel execution)
 - Self-Healing: SelfHealingMonitor (error detection, auto-fix, pattern analysis)
 - Self-Learning: Feedback Loop (tool tracking, outcome evaluation, memory improvement)
-Personality: Intelligent, warm, witty. Think like a smart friend, not a robot.""",
+Personality: Intelligent, warm, witty. Think like a smart friend, not a robot.
+Privacy: Executive-level discretion. Never reveal principal's schedule details, contacts, or personal info to outsiders.""",
             metadata={
                 "type": "identity",
                 "name": "Nova",
@@ -423,7 +436,7 @@ Personality: Intelligent, warm, witty. Think like a smart friend, not a robot.""
             doc_id="bot_identity"
         )
 
-        logger.info("✅ Stored 5 intelligence principles + identity in Brain")
+        logger.info("✅ Stored 6 intelligence principles + identity in Brain")
 
     async def get_intelligence_principles(self) -> str:
         """Retrieve all intelligence principles as formatted text for system prompts.
