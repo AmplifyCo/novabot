@@ -149,9 +149,8 @@ Models: Claude Opus/Sonnet/Haiku + SmolLM2 (local fallback)"""
 
         # Send startup notification
         await telegram.notify(
-            f"🚀 *Agent Starting*\n\n"
-            f"Mode: {'Self-Build' if config.self_build_mode else 'Production'}\n"
-            f"Model: {config.default_model}",
+            f"🚀 *Agent Starting*"
+            + (f"\n\nMode: Self-Build" if config.self_build_mode else ""),
             level="info"
         )
 
