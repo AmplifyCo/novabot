@@ -887,12 +887,29 @@ User says "John is my brother" → relationship|John is user's brother
 User says "haha that's funny" → none
 User says "good morning" → none"""
 
-            response = await self.anthropic_client.create_message(
-                model=intent_model,
-                max_tokens=100,
-                system=extract_prompt,
-                messages=[{"role": "user", "content": f"User: {user_message}\nBot: {bot_response}"}]
-            )
+            # Try Gemini Flash first (cheap, fast — ideal for fact extraction)
+            learn_messages = [{"role": "user", "content": f"User: {user_message}\nBot: {bot_response}"}]
+            response = None
+
+            if self.gemini_client and self.gemini_client.enabled:
+                try:
+                    response = await self.gemini_client.create_message(
+                        model="gemini/gemini-2.0-flash",
+                        messages=learn_messages,
+                        system=extract_prompt,
+                        max_tokens=100
+                    )
+                except Exception as e:
+                    logger.debug(f"Gemini learn extraction failed, trying Claude: {e}")
+
+            # Fallback to Claude if Gemini unavailable or failed
+            if response is None:
+                response = await self.anthropic_client.create_message(
+                    model=intent_model,
+                    max_tokens=100,
+                    system=extract_prompt,
+                    messages=learn_messages
+                )
 
             facts_text = response.content[0].text.strip()
             if facts_text.lower() == "none":
