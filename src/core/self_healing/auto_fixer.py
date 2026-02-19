@@ -751,7 +751,7 @@ class AutoFixer:
 
         try:
             response = await self.llm_client.create_message(
-                model="anthropic/claude-4-6-sonnet", # Use smart model for coding
+                model="anthropic/claude-sonnet-4-6", # Use smart model for coding
                 messages=[{"role": "user", "content": user_message}],
                 system=system_prompt,
                 max_tokens=2048
