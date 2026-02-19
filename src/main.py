@@ -171,7 +171,7 @@ Models: Claude Opus/Sonnet/Haiku + SmolLM2 (local fallback)"""
                 api_token=config.whatsapp_api_token,
                 phone_id=config.whatsapp_phone_id
             )
-            agent.tools.register_tool(whatsapp_tool)
+            agent.tools.register(whatsapp_tool)
             logger.info("📱 WhatsAppTool registered (Meta Cloud API)")
 
         # Initialize sub-agent spawner
