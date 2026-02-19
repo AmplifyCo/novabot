@@ -370,18 +370,21 @@ class ConversationManager:
             filtered_response = self._clean_response(filtered_response)
 
             # Store conversation turn in Brain for context continuity
-            # (Both CoreBrain and DigitalCloneBrain have conversation methods)
+            # (Non-critical: response is already generated, JSONL log is the backup)
             if self.brain and hasattr(self.brain, 'store_conversation_turn'):
-                await self.brain.store_conversation_turn(
-                    user_message=message,
-                    assistant_response=filtered_response,  # Store filtered version
-                    model_used=self._last_model_used,
-                    metadata={
-                        "channel": channel,
-                        "user_id": user_id,
-                        **(metadata or {})
-                    }
-                )
+                try:
+                    await self.brain.store_conversation_turn(
+                        user_message=message,
+                        assistant_response=filtered_response,
+                        model_used=self._last_model_used,
+                        metadata={
+                            "channel": channel,
+                            "user_id": user_id,
+                            **(metadata or {})
+                        }
+                    )
+                except Exception as brain_err:
+                    logger.warning(f"Failed to store turn in ChromaDB (non-critical): {brain_err}")
 
             # In-memory buffer: per-user, instant, reliable short-term context
             buffer_key = user_id or channel or "default"
