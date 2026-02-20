@@ -6,8 +6,9 @@ and responds with synthesized speech.
 """
 
 import logging
-from typing import Dict, Any, Optional
+from typing import Dict, Any, List, Optional
 from xml.etree.ElementTree import Element, SubElement, tostring
+from xml.sax.saxutils import escape
 
 logger = logging.getLogger(__name__)
 
