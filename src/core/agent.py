@@ -57,8 +57,8 @@ class AutonomousAgent:
         self.state_machine = AgentStateMachine()
 
         # Self-Improvement System
-        self.auto_fixer = AutoFixer(llm_client=self.gemini_client or self.api_client)
-
+        # Temporarily paused as per user request
+        # self.auto_fixer = AutoFixer(llm_client=self.gemini_client or self.api_client)
         fallback = "+ Gemini fallback" if gemini_client else ""
         logger.info(f"Initialized AutonomousAgent with {config.default_model} {fallback}")
 
@@ -473,7 +473,7 @@ class AutonomousAgent:
 
                 # ── SELF-IMPROVEMENT LOOP ──
                 # Check for "Missing Feature" errors (e.g. "Unknown operation")
-                if hasattr(self, 'auto_fixer'):
+                if getattr(self, 'auto_fixer', None):
                     is_missing_feature = any(
                         p in result.error for p in ["Unknown operation", "Tool not found", "operation not supported"]
                     )
