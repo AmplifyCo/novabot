@@ -72,6 +72,7 @@ class AutoFixer:
             ErrorType.TYPE_ERROR: self._fix_type_error,
             ErrorType.SERVICE_CRASH: self._fix_service_crash,
             ErrorType.TIMEOUT: self._fix_timeout,
+            ErrorType.MISSING_FEATURE: self._fix_code_error,
         }
 
         fix_func = fix_strategies.get(error.error_type)

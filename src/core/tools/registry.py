@@ -87,6 +87,25 @@ class ToolRegistry:
         """
         return self.tools.get(name)
 
+    def get_tool_file_path(self, name: str) -> Optional[str]:
+        """Get the file path where a tool is defined.
+
+        Args:
+            name: Tool name
+
+        Returns:
+            Absolute file path or None if not found
+        """
+        import inspect
+        tool = self.get_tool(name)
+        if not tool:
+            return None
+        try:
+            return inspect.getfile(tool.__class__)
+        except Exception as e:
+            logger.error(f"Failed to get file path for tool {name}: {e}")
+            return None
+
     def get_tool_definitions(self) -> List[Dict[str, Any]]:
         """Get all tool definitions for Claude API.
 

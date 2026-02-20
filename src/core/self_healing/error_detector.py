@@ -29,6 +29,7 @@ class ErrorType(Enum):
     TYPE_ERROR = "type_error"           # Type-related errors
     SERVICE_CRASH = "service_crash"     # Service stopped/crashed
     TIMEOUT = "timeout"                 # Operation timeouts
+    MISSING_FEATURE = "missing_feature" # Tool feature gap (e.g. unknown operation)
     UNKNOWN = "unknown"                 # Unclassified errors
 
 
@@ -102,6 +103,12 @@ class ErrorDetector:
             r"TimeoutError",
             r"timed out",
             r"timeout"
+        ],
+        ErrorType.MISSING_FEATURE: [
+            r"Unknown operation",
+            r"Tool not found",
+            r"is not a valid tool",
+            r"operation.*not supported"
         ]
     }
 
@@ -263,11 +270,17 @@ class ErrorDetector:
             ErrorType.TYPE_ERROR: ErrorSeverity.HIGH,
             ErrorType.SERVICE_CRASH: ErrorSeverity.CRITICAL,
             ErrorType.TIMEOUT: ErrorSeverity.MEDIUM,
+            ErrorType.MISSING_FEATURE: ErrorSeverity.MEDIUM,
             ErrorType.UNKNOWN: ErrorSeverity.MEDIUM
         }
 
         severity = severity_map.get(error_type, ErrorSeverity.MEDIUM)
-        auto_fixable = error_type in auto_fixable_types
+        
+        # Add MISSING_FEATURE to auto-fixable types
+        if error_type == ErrorType.MISSING_FEATURE:
+            auto_fixable = True
+        else:
+            auto_fixable = error_type in auto_fixable_types
 
         return severity, auto_fixable
 

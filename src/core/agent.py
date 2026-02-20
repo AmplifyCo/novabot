@@ -15,6 +15,8 @@ from .brain.core_brain import CoreBrain
 from .brain.digital_clone_brain import DigitalCloneBrain
 from ..integrations.anthropic_client import AnthropicClient
 from .nervous_system.state_machine import AgentStateMachine, AgentState
+from .self_healing.auto_fixer import AutoFixer
+from .self_healing.error_detector import DetectedError, ErrorType, ErrorSeverity
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +55,9 @@ class AutonomousAgent:
 
         # Nervous System: state machine for tracking execution state + cancellation
         self.state_machine = AgentStateMachine()
+
+        # Self-Improvement System
+        self.auto_fixer = AutoFixer(llm_client=self.gemini_client or self.api_client)
 
         fallback = "+ Gemini fallback" if gemini_client else ""
         logger.info(f"Initialized AutonomousAgent with {config.default_model} {fallback}")
@@ -437,13 +442,45 @@ class AutonomousAgent:
                 **tool_input
             )
 
-            # Build content: multimodal (screenshot+text) or plain string
             if result.success and result.content_blocks is not None:
                 content = result.content_blocks
             elif result.success:
                 content = result.output or ""
             else:
                 content = f"Error: {result.error}"
+
+                # ── SELF-IMPROVEMENT LOOP ──
+                # Check for "Missing Feature" errors (e.g. "Unknown operation")
+                if hasattr(self, 'auto_fixer'):
+                    is_missing_feature = any(
+                        p in result.error for p in ["Unknown operation", "Tool not found", "operation not supported"]
+                    )
+                    if is_missing_feature:
+                        logger.info(f"💡 Detected missing feature in tool {tool_name}: {result.error}")
+                        
+                        # Find source file
+                        file_path = self.tools.get_tool_file_path(tool_name)
+                        if file_path:
+                            # Create error context with file path (critical for _fix_code_error)
+                            error_context = f"Tool: {tool_name}\nError: {result.error}\nFile \"{file_path}\", line 1"
+                            
+                            detected_error = DetectedError(
+                                error_type=ErrorType.MISSING_FEATURE,
+                                severity=ErrorSeverity.MEDIUM,
+                                message=result.error,
+                                timestamp=datetime.now(),
+                                context=error_context,
+                                auto_fixable=True
+                            )
+                            
+                            # Attempt auto-fix (write code)
+                            fix_result = await self.auto_fixer.attempt_fix(detected_error)
+                            
+                            if fix_result.success:
+                                content += f"\n\n✨ I have automatically implemented this feature in `{Path(file_path).name}`.\n" \
+                                           f"Please RESTART the service to use it:\n" \
+                                           f"```bash\nsudo systemctl restart digital-twin\n```"
+                                logger.info(f"Auto-implemented feature for {tool_name}")
 
             tool_result = {
                 "type": "tool_result",
