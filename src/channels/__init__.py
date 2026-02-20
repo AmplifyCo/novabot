@@ -5,6 +5,7 @@ They only handle transport - intelligence is channel-agnostic.
 """
 
 from .telegram_channel import TelegramChannel
-from .whatsapp_channel import WhatsAppChannel
+from .twilio_whatsapp_channel import TwilioWhatsAppChannel
+from .twilio_voice_channel import TwilioVoiceChannel
 
-__all__ = ["TelegramChannel", "WhatsAppChannel"]
+__all__ = ["TelegramChannel", "TwilioWhatsAppChannel", "TwilioVoiceChannel"]
