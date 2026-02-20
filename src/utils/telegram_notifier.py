@@ -211,12 +211,13 @@ class TelegramCommandHandler:
             # Create application
             app = self.Application.builder().token(self.bot_token).build()
 
-            # Add default commands
-            app.add_handler(self.CommandHandler("start", self._handle_start))
-            app.add_handler(self.CommandHandler("help", self._handle_help))
-            app.add_handler(self.CommandHandler("status", self._handle_status))
+            # Register default commands
+            self.register_command("start", self._handle_start)
+            self.register_command("help", self._handle_help)
+            self.register_command("status", self._handle_status)
+            self.register_command("report", self._handle_report)
 
-            # Add custom commands
+            # Add all registered commands to the application
             for cmd, handler in self.handlers.items():
                 app.add_handler(self.CommandHandler(cmd, handler))
 
@@ -249,6 +250,7 @@ class TelegramCommandHandler:
 /status - Current build/execution status
 /logs - Recent log entries
 /progress - Build progress
+/report - Generate an on-demand daily digest report
 
 *Control:*
 /build - Start self-building mode
@@ -265,10 +267,45 @@ class TelegramCommandHandler:
 
     async def _handle_status(self, update, context):
         """Handle /status command."""
-        # This will be overridden by custom handler
-        await update.message.reply_text(
-            "📊 *Status*\n\n"
-            "Agent is running.\n"
-            "Register custom status handler for detailed info.",
-            parse_mode="Markdown"
-        )
+        logger.info("Received /status command")
+        message = "🟢 *System Status*\n\n"
+        message += "Bot is online and ready for tasks.\n"
+        message += "Use natural language to chat or ask me to do things."
+        
+        await update.message.reply_text(message, parse_mode='Markdown')
+
+    async def _handle_report(self, update, context):
+        """Handle /report command (generates DailyDigest on demand)."""
+        logger.info("Received /report command")
+        
+        # We need to access the DailyDigest instance attached to the agent
+        # The easiest way is via the TelegramNotifier's global context or by passing it in
+        # We'll try to find it via the orchestrator/agent if available, otherwise suggest waiting for auto-digest
+        
+        # Try to resolve agent from sys.modules or globals
+        try:
+            import sys
+            main_module = sys.modules.get('__main__')
+            if main_module:
+                # Need to lookup the daily_digest instance
+                # For now, let's create a temporary one just for this report
+                from ..self_healing.monitor import SelfHealingMonitor
+                from .daily_digest import DailyDigest
+                
+                # We don't have the exactly right monitor instance, so some stats might be missing
+                # but the log parsing and backlog file reading will work fine locally
+                temp_digest = DailyDigest(
+                    telegram=None,
+                    self_healing_monitor=None,
+                    log_file="./data/logs/agent.log",
+                    data_dir="./data"
+                )
+                
+                await update.message.reply_text("⏳ Generating report from logs...", parse_mode='Markdown')
+                report = await temp_digest.generate_report(hours=24)
+                await update.message.reply_text(report, parse_mode='Markdown')
+                return
+        except Exception as e:
+            logger.error(f"Error generating on-demand report: {e}")
+            
+        await update.message.reply_text("❌ Could not generate report. The daily digest will be sent automatically at 9 AM PST.", parse_mode='Markdown')

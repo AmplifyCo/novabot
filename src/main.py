@@ -32,6 +32,7 @@ from src.core.memory_consolidator import MemoryConsolidator
 from src.core.memory_consolidator import MemoryConsolidator
 from src.utils.memory_backup import MemoryBackup
 from src.core.brain.semantic_router import SemanticRouter
+from src.utils.daily_digest import DailyDigest
 
 # Setup logging — file handler is best-effort (don't crash if permission denied)
 LOG_DIR = Path("data/logs")
@@ -389,6 +390,20 @@ Models: Claude Opus/Sonnet/Haiku + SmolLM2 (local fallback)"""
         )
         memory_backup_task = asyncio.create_task(memory_backup.start())
 
+        # Start daily digest background task (9 AM PST)
+        daily_digest = DailyDigest(
+            telegram=telegram,
+            self_healing_monitor=self_healing,
+            log_file=str(LOG_DIR / "agent.log"),
+            data_dir="./data",
+            digest_hour=9,
+            digest_minute=0
+        )
+        digest_task = asyncio.create_task(daily_digest.start())
+
+        # Attach digest to agent so conversation_manager can access it for /report
+        agent.daily_digest = daily_digest
+
         # Start auto-updater background task
         auto_update_task = None
         if auto_updater.enabled:
@@ -408,6 +423,8 @@ Models: Claude Opus/Sonnet/Haiku + SmolLM2 (local fallback)"""
                 memory_consolidation_task.cancel()
             if memory_backup_task:
                 memory_backup_task.cancel()
+            if digest_task:
+                digest_task.cancel()
             if auto_update_task:
                 auto_update_task.cancel()
             if dashboard_task:
