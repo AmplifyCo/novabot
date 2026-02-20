@@ -86,37 +86,36 @@ class GeminiClient:
     def _sanitize_schema(self, schema: Any) -> Any:
         """Recursively sanitize JSON schema to prevent LiteLLM/Vertex crashes.
         
-        Fixes issues where LiteLLM expects a dict but gets a string, or chokes on 'anyOf'.
+        Fixes issues where LiteLLM expects a dict but gets a string, list, or chokes on 'anyOf'.
         """
-        # If the schema is literally just a string like "string" or "object"
-        # instead of {"type": "string"}, wrap it in a dict so litellm's .get() works.
         if isinstance(schema, str):
             return {"type": schema}
             
-        if isinstance(schema, list):
-            return [self._sanitize_schema(item) for item in schema]
+        elif isinstance(schema, list):
+            # If litellm hits a list inside the schema properties directly, it might crash
+            # trying to .get() it. Best to convert bare lists to safe representations.
+            # But normally lists only appear in "enum" and "required".
+            # We handle "enum" explicitly below by tossing it.
+            return [self._sanitize_schema(item) if isinstance(item, (dict, list)) else item for item in schema]
             
         elif isinstance(schema, dict):
-            # LiteLLM vertex parser crashes on 'anyOf' if it's not perfectly formed,
-            # or if it hits a string where it expects a dict with .get()
             sanitized = {}
             for k, v in schema.items():
-                if k == "anyOf" or k == "allOf" or k == "oneOf":
-                    # Strip union schemas entirely to be safe, Gemini doesn't need them
-                    # and they cause Vertex parse crashes.
+                if k in ("anyOf", "allOf", "oneOf", "enum"):
+                    # Strip complex union schemas and enums entirely to be safe.
+                    # Litellm's vertex parser often crashes iterating over enum lists
+                    # or union dicts doing .get(). Gemini doesn't strictly need them
+                    # as it can infer from the prompt/description.
                     continue
                     
-                # If a property definition is just a string or list, wrap it to prevent litellm crashes
+                # If a property definition is just a string or list, wrap/cast it
                 if k == "properties" and isinstance(v, dict):
                     prop_dict = {}
                     for pk, pv in v.items():
                         if isinstance(pv, str):
                             prop_dict[pk] = {"type": pv}
                         elif isinstance(pv, list):
-                            # Litellm crashes if a property definition itself is a list
-                            # It needs to be a dict e.g. {"type": "array", "items": {...}}
-                            # Often lists here are just accidental enums or bad schema formats
-                            prop_dict[pk] = {"type": "string"} # Fallback to string for safety
+                            prop_dict[pk] = {"type": "string"} # Fallback for safety
                         else:
                             prop_dict[pk] = self._sanitize_schema(pv)
                     sanitized[k] = prop_dict
