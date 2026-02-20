@@ -20,7 +20,8 @@ class TwilioVoiceChannel:
         auth_token: str,
         phone_number: str,
         conversation_manager,
-        twilio_call_tool = None
+        twilio_call_tool = None,
+        allowed_numbers: Optional[List[str]] = None
     ):
         """Initialize Twilio Voice channel.
 
@@ -30,12 +31,14 @@ class TwilioVoiceChannel:
             phone_number: Twilio Phone Number
             conversation_manager: ConversationManager instance
             twilio_call_tool: Optional TwilioCallTool for ElevenLabs TTS
+            allowed_numbers: Optional list of allowed numbers
         """
         self.account_sid = account_sid
         self.auth_token = auth_token
         self.phone_number = phone_number
         self.conversation_manager = conversation_manager
         self.twilio_call_tool = twilio_call_tool
+        self.allowed_numbers = allowed_numbers or []
         
         self.enabled = bool(account_sid and auth_token and phone_number)
         
@@ -58,65 +61,69 @@ class TwilioVoiceChannel:
         Returns:
             TwiML string
         """
-        from xml.sax.saxutils import escape
+        response = Element("Response")
         
-        response = Element('Response')
-        
-        # Attempt ElevenLabs TTS if we have the tool and it's enabled
-        audio_url = None
-        if text and self.twilio_call_tool and self.twilio_call_tool.elevenlabs_enabled and self.twilio_call_tool.base_url:
-            try:
-                # Ask call tool to generate ElevenLabs MP3
-                filename = await self.twilio_call_tool._generate_elevenlabs_audio(text, "female")
-                if filename:
-                    audio_url = f"{self.twilio_call_tool.base_url.rstrip('/')}/audio/{filename}"
-            except Exception as e:
-                logger.warning(f"Failed to generate ElevenLabs TTS in voice channel: {e}")
-                
-        def _add_speech(parent_el, speech_text):
-            if audio_url:
-                # Premium ElevenLabs Voice
-                play = SubElement(parent_el, 'Play')
-                play.text = escape(audio_url)
-            else:
-                # Fallback Google Journey Voice
-                say = SubElement(parent_el, 'Say', {'voice': self.voice, 'language': self.language})
-                say.text = escape(speech_text)
-
-        if text and not prompt_for_input:
-            # Just say it and hang up
-            _add_speech(response, text)
-            SubElement(response, 'Hangup')
+        if text:
+            # Try ElevenLabs first if we have the tool
+            twiml_injected = False
+            if self.twilio_call_tool and self.twilio_call_tool.elevenlabs_enabled:
+                audio_filename = await self.twilio_call_tool._generate_elevenlabs_audio(text)
+                if audio_filename and self.twilio_call_tool.base_url:
+                    audio_url = f"{self.twilio_call_tool.base_url.rstrip('/')}/audio/{audio_filename}"
+                    play = SubElement(response, "Play")
+                    play.text = audio_url
+                    twiml_injected = True
             
-        elif prompt_for_input:
+            # Fallback to Google Journey voices
+            if not twiml_injected:
+                say = SubElement(response, "Say", voice=self.voice, language=self.language)
+                # Important: Twilio expects valid XML, escape special characters
+                say.text = escape(text)
+            
+        if prompt_for_input:
             # Gather speech input
-            # action="/twilio/voice/gather" is where Twilio POSTs the transcribed text
-            gather = SubElement(response, 'Gather', {
-                'input': 'speech',
-                'action': '/twilio/voice/gather',
-                'speechTimeout': 'auto',
-                'language': self.language
-            })
+            # Timeout: time to wait for the user to start speaking
+            # SpeechTimeout: time to wait for the user to stop speaking
+            gather = SubElement(
+                response, 
+                "Gather", 
+                input="speech",
+                action="/twilio/voice/gather",
+                timeout="5",
+                speechTimeout="auto",
+                language="en-US"
+            )
+            # You can optionally add a beep or short prompt inside Gather
+            # say = SubElement(gather, "Say", voice=self.voice)
+            # say.text = "I'm listening."
             
-            if text:
-                _add_speech(gather, text)
-            else:
-                _add_speech(gather, "Hello. How can I help you today?")
-
-        # Convert to string with proper XML declaration
-        xml_str = tostring(response, encoding='utf-8').decode('utf-8')
-        return f"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n{xml_str}"
+        return tostring(response, encoding="unicode")
 
     def _get_user_number(self, form_data: Dict[str, str]) -> str:
-        """Determine who the user is.
+        """Determine the actual user's phone number based on call direction.
         
-        For inbound calls to us, the user is 'From'.
-        For outbound calls from us, the user is 'To' (or 'Called').
+        Inbound calls trigger the webhook directly with the user's number in 'From'.
+        Outbound calls (API initiated) trigger the webhook on answer or gather,
+        where 'To' is the user we called and 'From' is our Twilio number.
         """
-        direction = form_data.get("Direction", "inbound")
-        if direction == "outbound-api":
-            return form_data.get("To") or form_data.get("Called", "Unknown")
-        return form_data.get("From", "Unknown")
+        direction = form_data.get("Direction", "")
+        
+        # In outbound calls, the webhook fires after the call connects.
+        # The 'To' field contains the recipient's number.
+        if "outbound" in direction.lower() or form_data.get("From") == self.phone_number:
+            raw_number = form_data.get("To", "unknown_outbound")
+        else:
+            raw_number = form_data.get("From", "unknown_inbound")
+            
+        # Strip prefixes for clean matching
+        clean_number = raw_number.replace("whatsapp:", "")
+        clean_allowed = [num.replace("whatsapp:", "") for num in self.allowed_numbers]
+        
+        # Explicitly identify Principal to prevent LLM hallucination
+        if clean_number in clean_allowed:
+            return "Srinath (Principal)"
+        
+        return clean_number
 
     async def handle_incoming_call(self, form_data: Dict[str, str]) -> str:
         """Handle initial incoming call webhook (/twilio/voice).

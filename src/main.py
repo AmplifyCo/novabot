@@ -360,7 +360,7 @@ Models: Claude Opus/Sonnet/Haiku + SmolLM2 (local fallback)"""
                     auth_token=config.twilio_auth_token,
                     whatsapp_number=config.twilio_whatsapp_number,
                     conversation_manager=conversation_manager,
-                    allowed_numbers=None # TODO: Map from config if needed
+                    allowed_numbers=config.whatsapp_allowed_numbers
                 )
                 # Register with dashboard
                 if dashboard.enabled:
@@ -375,7 +375,8 @@ Models: Claude Opus/Sonnet/Haiku + SmolLM2 (local fallback)"""
                     auth_token=config.twilio_auth_token,
                     phone_number=config.twilio_phone_number,
                     conversation_manager=conversation_manager,
-                    twilio_call_tool=twilio_call_tool if 'twilio_call_tool' in locals() else None
+                    twilio_call_tool=twilio_call_tool if 'twilio_call_tool' in locals() else None,
+                    allowed_numbers=config.whatsapp_allowed_numbers
                 )
                 # Register with dashboard
                 if dashboard.enabled:

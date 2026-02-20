@@ -89,13 +89,15 @@ class TwilioWhatsAppChannel:
             # We strip 'whatsapp:' prefix internally for the user_id if we want,
             # but it is better to pass the exact identifier so we can reply back easily.
             # actually better to just strip it so the memory aligns with phone/SMS.
-            user_id = from_number.replace('whatsapp:', '')
+            clean_number = from_number.replace('whatsapp:', '')
             
-            # The ConversationManager will ultimately call the WhatsApp tool to reply.
-            # But the user specifically wanted to use Twilio here. The normal agent design
-            # is to have a tool for outbound messages. We can either:
-            # 1. Have the agent use `WhatsAppTool` but powered by Twilio.
-            # 2. Add an explicit reply here using `self.client`.
+            # Explicitly identify the Principal to the LLM so it doesn't get confused
+            # when asked to contact other people.
+            clean_allowed = [num.replace('whatsapp:', '') for num in self.allowed_numbers]
+            if clean_number in clean_allowed:
+                user_id = "Srinath (Principal)"
+            else:
+                user_id = clean_number
             
             # Let's pass it to the ConversationManager, and we'll reply directly 
             # upon getting the return value (simpler integration).
