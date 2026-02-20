@@ -69,8 +69,18 @@ class TwilioWhatsAppTool(BaseTool):
                 success=False
             )
             
-        # Ensure 'whatsapp:' prefix
-        formatted_to = to_number if to_number.startswith('whatsapp:') else f"whatsapp:{to_number}"
+        # Normalize phone number to E.164 format
+        import re
+        # Strip whatsapp: prefix if present so we can clean the number
+        to_number = to_number.replace("whatsapp:", "")
+        # Keep only digits and + sign (strips dashes, parens, spaces)
+        to_number = re.sub(r'[^\d+]', '', to_number)
+        # Auto-add +1 for bare 10-digit US/Canada numbers
+        if len(to_number) == 10 and not to_number.startswith("+"):
+            to_number = f"+1{to_number}"
+        elif not to_number.startswith("+"):
+            to_number = f"+{to_number}"
+        formatted_to = f"whatsapp:{to_number}"
             
         try:
             logger.info(f"Sending Twilio WhatsApp message to {formatted_to}")
