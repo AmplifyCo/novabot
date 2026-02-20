@@ -16,18 +16,14 @@ class TwilioWhatsAppTool(BaseTool):
     )
     
     parameters = {
-        "type": "object",
-        "properties": {
-            "to_number": {
-                "type": "string",
-                "description": "The destination phone number (e.g., '+1234567890' or 'whatsapp:+1234567890')"
-            },
-            "message": {
-                "type": "string",
-                "description": "The message text to send"
-            }
+        "to_number": {
+            "type": "string",
+            "description": "The destination phone number (e.g., '+1234567890' or 'whatsapp:+1234567890')"
         },
-        "required": ["to_number", "message"]
+        "message": {
+            "type": "string",
+            "description": "The message text to send"
+        }
     }
     
     def __init__(self, account_sid: str, auth_token: str, from_number: str):

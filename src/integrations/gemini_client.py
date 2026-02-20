@@ -83,47 +83,72 @@ class GeminiClient:
         if anthropic_api_key:
             os.environ["ANTHROPIC_API_KEY"] = anthropic_api_key
 
-    def _sanitize_schema(self, schema: Any) -> Any:
-        """Recursively sanitize JSON schema to prevent LiteLLM/Vertex crashes.
-        
-        Fixes issues where LiteLLM expects a dict but gets a string, list, or chokes on 'anyOf'.
+    # Fields that Gemini function declarations support
+    _GEMINI_ALLOWED_FIELDS = {
+        "type", "description", "properties", "required", "items",
+        "nullable", "format"
+    }
+
+    def _sanitize_schema(self, schema: Any, _depth: int = 0) -> Any:
+        """Recursively sanitize JSON schema for Gemini/LiteLLM compatibility.
+
+        Gemini function declarations only support a subset of JSON Schema.
+        This strips unsupported fields (default, enum, anyOf, etc.) and
+        flattens nested objects that Gemini can't handle.
         """
-        if isinstance(schema, str):
-            return {"type": schema}
-            
-        elif isinstance(schema, list):
-            # If litellm hits a list inside the schema properties directly, it might crash
-            # trying to .get() it. Best to convert bare lists to safe representations.
-            # But normally lists only appear in "enum" and "required".
-            # We handle "enum" explicitly below by tossing it.
-            return [self._sanitize_schema(item) if isinstance(item, (dict, list)) else item for item in schema]
-            
-        elif isinstance(schema, dict):
+        # Primitives stay as-is (don't wrap strings into {"type": str})
+        if schema is None or isinstance(schema, (str, int, float, bool)):
+            return schema
+
+        if isinstance(schema, list):
+            return [
+                self._sanitize_schema(item, _depth + 1)
+                if isinstance(item, (dict, list)) else item
+                for item in schema
+            ]
+
+        if isinstance(schema, dict):
             sanitized = {}
             for k, v in schema.items():
-                if k in ("anyOf", "allOf", "oneOf", "enum"):
-                    # Strip complex union schemas and enums entirely to be safe.
-                    # Litellm's vertex parser often crashes iterating over enum lists
-                    # or union dicts doing .get(). Gemini doesn't strictly need them
-                    # as it can infer from the prompt/description.
+                # Strip fields Gemini doesn't support
+                if k in ("anyOf", "allOf", "oneOf", "enum", "default",
+                          "title", "examples", "$ref", "$schema",
+                          "additionalProperties", "minItems", "maxItems",
+                          "minimum", "maximum", "pattern", "minLength",
+                          "maxLength", "exclusiveMinimum", "exclusiveMaximum"):
                     continue
-                    
-                # If a property definition is just a string or list, wrap/cast it
+
+                # Special handling for properties dict
                 if k == "properties" and isinstance(v, dict):
                     prop_dict = {}
                     for pk, pv in v.items():
                         if isinstance(pv, str):
                             prop_dict[pk] = {"type": pv}
+                        elif isinstance(pv, dict):
+                            cleaned = self._sanitize_schema(pv, _depth + 1)
+                            # Flatten nested objects to string for Gemini safety
+                            if (isinstance(cleaned, dict) and
+                                    cleaned.get("type") == "object" and
+                                    "properties" in cleaned):
+                                prop_dict[pk] = {
+                                    "type": "string",
+                                    "description": cleaned.get(
+                                        "description",
+                                        f"JSON string for {pk}"
+                                    )
+                                }
+                            else:
+                                prop_dict[pk] = cleaned
                         elif isinstance(pv, list):
-                            prop_dict[pk] = {"type": "string"} # Fallback for safety
+                            prop_dict[pk] = {"type": "string"}
                         else:
-                            prop_dict[pk] = self._sanitize_schema(pv)
+                            prop_dict[pk] = {"type": "string"}
                     sanitized[k] = prop_dict
                 else:
-                    sanitized[k] = self._sanitize_schema(v)
-                    
+                    sanitized[k] = self._sanitize_schema(v, _depth + 1)
+
             return sanitized
-            
+
         return schema
 
     def _convert_tools_for_litellm(self, tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -288,16 +313,22 @@ class GeminiClient:
                 "model": model,
                 "messages": litellm_messages,
                 "max_tokens": max_tokens,
-                "api_key": self.api_key,
             }
+
+            # Route API key by provider — don't pass Gemini key for Anthropic models
+            is_anthropic = model.startswith("anthropic/")
+            if is_anthropic:
+                # LiteLLM uses ANTHROPIC_API_KEY from env for Claude models
+                pass
+            else:
+                # Gemini or other models — pass the Gemini key
+                call_kwargs["api_key"] = self.api_key
+                if self.api_key:
+                    os.environ["GEMINI_API_KEY"] = self.api_key
 
             # Add tools if provided
             if tools:
                 call_kwargs["tools"] = self._convert_tools_for_litellm(tools)
-
-            # Ensure LiteLLM can find the key in the environment since we are routing explicitly
-            if self.api_key:
-                os.environ["GEMINI_API_KEY"] = self.api_key
 
             # Retry Loop
             last_exception = None
