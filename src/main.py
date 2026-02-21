@@ -325,7 +325,6 @@ Models: Claude Opus/Sonnet/Haiku + SmolLM2 (local fallback)"""
             model_router = ModelRouter(config)
 
             # Initialize unified LiteLLM client (routes both Gemini + Claude)
-            import os
             gemini_api_key = os.getenv("GEMINI_API_KEY", "")
             gemini_client = GeminiClient(
                 api_key=gemini_api_key,
