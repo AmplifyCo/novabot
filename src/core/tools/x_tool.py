@@ -177,6 +177,11 @@ class XTool(BaseTool):
 
         X API v2 search requires Pro tier ($5k/month). This uses web search
         to find X content without API restrictions.
+
+        Strategy (tries in order until results found):
+          1. site:x.com <query>           — preferred, x.com is canonical
+          2. site:twitter.com <query>     — fallback for old twitter.com URLs
+          3. <query> twitter              — broad fallback, filter for X URLs
         """
         if not query:
             return ToolResult(success=False, error="query is required for search_tweets")
@@ -189,27 +194,58 @@ class XTool(BaseTool):
                 error="Missing dependency: pip install duckduckgo-search"
             )
 
-        # Search specifically on X/Twitter
-        x_query = f"site:x.com OR site:twitter.com {query}"
+        x_domains = ("x.com", "twitter.com")
+
+        def _ddg_search(search_query: str, n: int):
+            """Run DuckDuckGo text search, return list of result dicts."""
+            hits = []
+            try:
+                with DDGS() as ddgs:
+                    for r in ddgs.text(search_query, max_results=n):
+                        hits.append({
+                            "title": r.get("title", ""),
+                            "url": r.get("href", ""),
+                            "snippet": r.get("body", ""),
+                        })
+            except Exception as exc:
+                logger.warning(f"DuckDuckGo search error for '{search_query}': {exc}")
+            return hits
+
+        import asyncio
+        loop = asyncio.get_event_loop()
+
         results = []
-        try:
-            with DDGS() as ddgs:
-                for r in ddgs.text(x_query, max_results=max_results):
-                    results.append({
-                        "title": r.get("title", ""),
-                        "url": r.get("href", ""),
-                        "snippet": r.get("body", ""),
-                    })
-        except Exception as e:
-            logger.warning(f"X search via DuckDuckGo failed: {e}")
-            return ToolResult(success=False, error=f"Search failed: {e}")
+
+        # Strategy 1: site:x.com
+        results = await loop.run_in_executor(
+            None, lambda: _ddg_search(f"site:x.com {query}", max_results)
+        )
+        logger.debug(f"X search strategy 1 (site:x.com): {len(results)} results")
+
+        # Strategy 2: site:twitter.com (fallback)
+        if not results:
+            results = await loop.run_in_executor(
+                None, lambda: _ddg_search(f"site:twitter.com {query}", max_results)
+            )
+            logger.debug(f"X search strategy 2 (site:twitter.com): {len(results)} results")
+
+        # Strategy 3: broad search — filter to X/Twitter URLs
+        if not results:
+            broad = await loop.run_in_executor(
+                None, lambda: _ddg_search(f"{query} twitter", max_results * 2)
+            )
+            results = [r for r in broad if any(d in r["url"] for d in x_domains)]
+            logger.debug(f"X search strategy 3 (broad+filter): {len(results)} results")
 
         if not results:
             return ToolResult(
                 success=True,
-                output=f"No X posts found for: {query}",
+                output=f"No X posts found for '{query}'. X content may not be indexed by search engines right now — try a more specific query or different keywords.",
                 metadata={"results": [], "query": query}
             )
+
+        # Trim to max_results
+        results = results[:max_results]
 
         formatted = f"X search results for '{query}':\n\n"
         for i, r in enumerate(results, 1):
