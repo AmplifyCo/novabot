@@ -20,17 +20,18 @@ class XTool(BaseTool):
 
     name = "x_tool"
     description = (
-        "Tool to interact with X (Twitter) — search, post, retweet, look up profiles, and manage communities. "
-        "Use 'search_tweets' to find X posts/discussions on any topic (no API tier restriction — uses DuckDuckGo). "
+        "Tool to interact with X (Twitter) — search, post, retweet, look up profiles, and read communities. "
+        "Use 'search_tweets' to find X posts/discussions on any topic (uses real X API, falls back to DuckDuckGo). "
+        "Use 'read_community' to read the latest posts from an X Community (e.g. 'Build in Public'). "
         "Use 'lookup_user' to get a specific X handle's profile: bio, follower count, tweet count. "
         "Use 'post_tweet' or 'post_to_community' to publish content. "
-        "Use when: researching X opinions, checking someone's X profile, posting updates, or engaging with X communities."
+        "Use when: researching X opinions, reading community discussions, checking profiles, or posting updates."
     )
     parameters = {
         "operation": {
             "type": "string",
-            "description": "Operation: 'search_tweets', 'lookup_user', 'post_tweet', 'delete_tweet', 'post_to_community', 'retweet', 'quote_tweet', 'follow_user', or 'save_community'",
-            "enum": ["search_tweets", "lookup_user", "post_tweet", "delete_tweet", "post_to_community", "retweet", "quote_tweet", "follow_user", "save_community"]
+            "description": "Operation: 'search_tweets', 'lookup_user', 'read_community', 'post_tweet', 'delete_tweet', 'post_to_community', 'retweet', 'quote_tweet', 'follow_user', or 'save_community'",
+            "enum": ["search_tweets", "lookup_user", "read_community", "post_tweet", "delete_tweet", "post_to_community", "retweet", "quote_tweet", "follow_user", "save_community"]
         },
         "content": {
             "type": "string",
@@ -143,6 +144,8 @@ class XTool(BaseTool):
                 return await self._search_tweets(query, max_results)
             elif operation == "lookup_user":
                 return await self._lookup_user(target_username)
+            elif operation == "read_community":
+                return await self._read_community(community_id, max_results)
             elif operation == "post_tweet":
                 return await self._post_tweet(content)
             elif operation == "delete_tweet":
@@ -176,89 +179,182 @@ class XTool(BaseTool):
             )
 
     async def _search_tweets(self, query: Optional[str], max_results: int = 10) -> ToolResult:
-        """Search X for tweets/discussions on a topic using DuckDuckGo.
+        """Search X for tweets/discussions on a topic.
 
-        X API v2 search requires Pro tier ($5k/month). This uses web search
-        to find X content without API restrictions.
-
-        Strategy (tries in order until results found):
-          1. site:x.com <query>           — preferred, x.com is canonical
-          2. site:twitter.com <query>     — fallback for old twitter.com URLs
-          3. <query> twitter              — broad fallback, filter for X URLs
+        Strategy:
+          1. X API v2 /tweets/search/recent  — real-time, accurate (pay-per-use/Basic+)
+          2. DuckDuckGo site:x.com           — fallback if API fails or returns nothing
+          3. DuckDuckGo site:twitter.com     — secondary fallback
+          4. DuckDuckGo broad + URL filter   — last resort
         """
         if not query:
             return ToolResult(success=False, error="query is required for search_tweets")
 
-        try:
-            from duckduckgo_search import DDGS
-        except ImportError:
-            return ToolResult(
-                success=False,
-                error="Missing dependency: pip install duckduckgo-search"
-            )
-
-        x_domains = ("x.com", "twitter.com")
-
-        def _ddg_search(search_query: str, n: int):
-            """Run DuckDuckGo text search, return list of result dicts."""
-            hits = []
-            try:
-                with DDGS() as ddgs:
-                    for r in ddgs.text(search_query, max_results=n):
-                        hits.append({
-                            "title": r.get("title", ""),
-                            "url": r.get("href", ""),
-                            "snippet": r.get("body", ""),
-                        })
-            except Exception as exc:
-                logger.warning(f"DuckDuckGo search error for '{search_query}': {exc}")
-            return hits
-
         import asyncio
         loop = asyncio.get_event_loop()
 
-        results = []
-
-        # Strategy 1: site:x.com
-        results = await loop.run_in_executor(
-            None, lambda: _ddg_search(f"site:x.com {query}", max_results)
-        )
-        logger.debug(f"X search strategy 1 (site:x.com): {len(results)} results")
-
-        # Strategy 2: site:twitter.com (fallback)
-        if not results:
-            results = await loop.run_in_executor(
-                None, lambda: _ddg_search(f"site:twitter.com {query}", max_results)
+        # ── Strategy 1: Real X API ────────────────────────────────────────────
+        def _api_search():
+            oauth = self._get_oauth1_session()
+            n = min(max(max_results, 10), 100)  # API min=10, max=100
+            resp = oauth.get(
+                f"{self.api_base}/tweets/search/recent",
+                params={
+                    "query": query,
+                    "max_results": n,
+                    "tweet.fields": "created_at,text,public_metrics,author_id",
+                    "expansions": "author_id",
+                    "user.fields": "name,username",
+                }
             )
-            logger.debug(f"X search strategy 2 (site:twitter.com): {len(results)} results")
+            return resp
 
-        # Strategy 3: broad search — filter to X/Twitter URLs
+        try:
+            resp = await loop.run_in_executor(None, _api_search)
+            if resp.status_code == 200:
+                data = resp.json()
+                tweets = data.get("data", [])
+                users = {u["id"]: u for u in data.get("includes", {}).get("users", [])}
+                if tweets:
+                    formatted = f"X posts for '{query}' (live results):\n\n"
+                    for i, t in enumerate(tweets[:max_results], 1):
+                        author = users.get(t.get("author_id", ""), {})
+                        handle = author.get("username", "unknown")
+                        name = author.get("name", "")
+                        metrics = t.get("public_metrics", {})
+                        formatted += (
+                            f"{i}. @{handle} ({name})\n"
+                            f"   {t['text']}\n"
+                            f"   ❤️ {metrics.get('like_count',0)}  🔁 {metrics.get('retweet_count',0)}"
+                            f"  [{t.get('created_at','')[:10]}]\n"
+                            f"   https://x.com/{handle}/status/{t['id']}\n\n"
+                        )
+                    logger.info(f"X API search: {len(tweets)} results for: {query}")
+                    return ToolResult(
+                        success=True,
+                        output=formatted.strip(),
+                        metadata={"results": tweets, "query": query, "count": len(tweets), "source": "x_api"}
+                    )
+            else:
+                logger.warning(f"X API search returned {resp.status_code} — falling back to DuckDuckGo")
+        except Exception as e:
+            logger.warning(f"X API search failed ({e}) — falling back to DuckDuckGo")
+
+        # ── Strategies 2-4: DuckDuckGo fallback ──────────────────────────────
+        try:
+            from duckduckgo_search import DDGS
+        except ImportError:
+            return ToolResult(success=False, error="Missing dependency: pip install duckduckgo-search")
+
+        x_domains = ("x.com", "twitter.com")
+
+        def _ddg(q: str, n: int):
+            hits = []
+            try:
+                with DDGS() as ddgs:
+                    for r in ddgs.text(q, max_results=n):
+                        hits.append({"title": r.get("title",""), "url": r.get("href",""), "snippet": r.get("body","")})
+            except Exception as exc:
+                logger.warning(f"DuckDuckGo error for '{q}': {exc}")
+            return hits
+
+        results = await loop.run_in_executor(None, lambda: _ddg(f"site:x.com {query}", max_results))
         if not results:
-            broad = await loop.run_in_executor(
-                None, lambda: _ddg_search(f"{query} twitter", max_results * 2)
-            )
+            results = await loop.run_in_executor(None, lambda: _ddg(f"site:twitter.com {query}", max_results))
+        if not results:
+            broad = await loop.run_in_executor(None, lambda: _ddg(f"{query} twitter", max_results * 2))
             results = [r for r in broad if any(d in r["url"] for d in x_domains)]
-            logger.debug(f"X search strategy 3 (broad+filter): {len(results)} results")
 
         if not results:
             return ToolResult(
                 success=True,
-                output=f"No X posts found for '{query}'. X content may not be indexed by search engines right now — try a more specific query or different keywords.",
+                output=f"No X posts found for '{query}'. Try a more specific query or different keywords.",
                 metadata={"results": [], "query": query}
             )
 
-        # Trim to max_results
         results = results[:max_results]
-
         formatted = f"X search results for '{query}':\n\n"
         for i, r in enumerate(results, 1):
             formatted += f"{i}. {r['title']}\n   {r['url']}\n   {r['snippet']}\n\n"
 
-        logger.info(f"X search returned {len(results)} results for: {query}")
+        logger.info(f"X search (DuckDuckGo fallback): {len(results)} results for: {query}")
         return ToolResult(
             success=True,
             output=formatted.strip(),
-            metadata={"results": results, "query": query, "count": len(results)}
+            metadata={"results": results, "query": query, "count": len(results), "source": "duckduckgo"}
+        )
+
+    async def _read_community(self, community_id: Optional[str], max_results: int = 20) -> ToolResult:
+        """Read recent posts from an X Community.
+
+        Resolves community name to ID via cache if a name is given.
+        Requires read access (pay-per-use or Basic tier).
+        """
+        import asyncio
+
+        if not community_id:
+            return ToolResult(success=False, error="community_id (name or numeric ID) is required for read_community")
+
+        # Resolve name → numeric ID
+        resolved_id = await self._resolve_community_id(community_id)
+        if not resolved_id:
+            return ToolResult(
+                success=False,
+                error=(
+                    f"Could not find community '{community_id}'. "
+                    f"Use save_community(community_name='{community_id}', community_id=<numeric ID>) to cache it."
+                )
+            )
+
+        loop = asyncio.get_event_loop()
+        n = min(max(max_results, 10), 100)
+
+        def _fetch():
+            oauth = self._get_oauth1_session()
+            return oauth.get(
+                f"{self.api_base}/communities/{resolved_id}/tweets",
+                params={
+                    "max_results": n,
+                    "tweet.fields": "created_at,text,public_metrics,author_id",
+                    "expansions": "author_id",
+                    "user.fields": "name,username",
+                }
+            )
+
+        resp = await loop.run_in_executor(None, _fetch)
+
+        if resp.status_code != 200:
+            return self._handle_error(resp)
+
+        data = resp.json()
+        tweets = data.get("data", [])
+        users = {u["id"]: u for u in data.get("includes", {}).get("users", [])}
+
+        if not tweets:
+            return ToolResult(
+                success=True,
+                output=f"No recent posts found in community '{community_id}'.",
+                metadata={"community_id": resolved_id, "count": 0}
+            )
+
+        formatted = f"Latest posts from '{community_id}' community:\n\n"
+        for i, t in enumerate(tweets, 1):
+            author = users.get(t.get("author_id", ""), {})
+            handle = author.get("username", "unknown")
+            name = author.get("name", "")
+            metrics = t.get("public_metrics", {})
+            formatted += (
+                f"{i}. @{handle} ({name})\n"
+                f"   {t['text']}\n"
+                f"   ❤️ {metrics.get('like_count',0)}  🔁 {metrics.get('retweet_count',0)}"
+                f"  [{t.get('created_at','')[:10]}]\n\n"
+            )
+
+        logger.info(f"Read {len(tweets)} posts from community {resolved_id}")
+        return ToolResult(
+            success=True,
+            output=formatted.strip(),
+            metadata={"community_id": resolved_id, "count": len(tweets)}
         )
 
     async def _lookup_user(self, username: Optional[str]) -> ToolResult:
