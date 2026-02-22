@@ -69,8 +69,8 @@ def load_config(env_file: str = ".env", config_file: str = "config/agent.yaml") 
 
         # Git
         auto_commit=os.getenv("AUTO_COMMIT", "true").lower() == "true",
-        git_user_name=os.getenv("GIT_USER_NAME", "Autonomous Agent"),
-        git_user_email=os.getenv("GIT_USER_EMAIL", "agent@autonomous.ai"),
+        git_user_name=os.getenv("GIT_USER_NAME", ""),
+        git_user_email=os.getenv("GIT_USER_EMAIL", ""),
 
         # Monitoring
         telegram_bot_token=os.getenv("TELEGRAM_BOT_TOKEN"),
