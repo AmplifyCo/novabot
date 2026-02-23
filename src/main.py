@@ -383,6 +383,10 @@ Models: Claude Opus/Sonnet/Haiku + SmolLM2 (local fallback)"""
             # Wire task_queue into the NovaTaskTool in agent's registry
             agent.tools.set_task_queue(task_queue)
 
+            # Make task_queue/goal_decomposer accessible outside this block
+            _task_queue = task_queue
+            _goal_decomposer = goal_decomposer
+
             # ── AGI/Human-like capabilities ───────────────────────────────
             working_memory = WorkingMemory(path="./data/working_memory.json")
             episodic_memory = EpisodicMemory(path="./data/episodic_memory")
@@ -459,16 +463,19 @@ Models: Claude Opus/Sonnet/Haiku + SmolLM2 (local fallback)"""
 
         # Start background TaskRunner (autonomous multi-step task execution)
         _whatsapp_ch = twilio_whatsapp_channel if 'twilio_whatsapp_channel' in locals() else None
-        _task_runner = TaskRunner(
-            task_queue=task_queue,
-            goal_decomposer=goal_decomposer,
-            agent=agent,
-            telegram_notifier=telegram,
-            brain=digital_brain,
-            whatsapp_channel=_whatsapp_ch,
-        )
-        asyncio.create_task(_task_runner.start())
-        logger.info("🚀 Background TaskRunner started")
+        if 'task_queue' in locals():
+            _task_runner = TaskRunner(
+                task_queue=task_queue,
+                goal_decomposer=goal_decomposer,
+                agent=agent,
+                telegram_notifier=telegram,
+                brain=digital_brain,
+                whatsapp_channel=_whatsapp_ch,
+            )
+            asyncio.create_task(_task_runner.start())
+            logger.info("🚀 Background TaskRunner started")
+        else:
+            logger.warning("TaskRunner skipped (Telegram not configured — task_queue unavailable)")
 
         # Start AttentionEngine (proactive observations every 6h)
         _gemini_for_attention = gemini_client if 'gemini_client' in locals() else None
