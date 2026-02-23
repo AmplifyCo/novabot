@@ -1490,12 +1490,13 @@ RECENT CONVERSATION (use this to understand context):
 
             intent_prompt = f"""Intent classifier. Map user message to the right intent and tools.
 {tool_context}{history_context}
-Return EXACTLY: intent|confidence|inferred_task|tools
+Return EXACTLY: intent|confidence|inferred_task|tools|needs_background
 
 - intent: one of the intent names below
 - confidence: high / medium / low
-- inferred_task: concise description of what to do, or "none"
+- inferred_task: expand vague requests into a concrete actionable description using the Purpose context (manage email/calendar/social media/research on principal's behalf). Never return "none" for action intents.
 - tools: comma-separated tool names from AVAILABLE TOOLS that will be needed, or "none"
+- needs_background: "yes" if task requires 3+ tool calls, multi-step research, or more than ~1 minute of work. "no" for quick single-tool actions.
 
 Intents:
 - action: needs a tool to execute (email, calendar, bash, file, web, search, post, reminder, etc.)
@@ -1514,29 +1515,37 @@ For action intents, list the specific tools needed from AVAILABLE TOOLS above.
 Multiple tools allowed (e.g. email_list,email_send for "reply to unread emails").
 Use "none" only when no tool applies.
 
+GOAL ELABORATION RULE:
+For short/vague action requests, expand inferred_task to be specific enough to execute:
+- "Show presence on X" → Search X for recent AI/tech discussions, post 2-3 thoughtful replies with principal's voice
+- "Research openclaw" → Search web and X for openclaw, compile findings into a summary
+- "Handle my emails" → Check inbox, summarize unread, draft replies for important ones
+
 Examples:
-"Post on X: AI is the future" → action|high|Post exact: AI is the future|x_post
-"Check my email" → action|high|Check inbox for new messages|email_list
-"Any unread emails?" → action|high|Check inbox for unread emails|email_list
-"Do I have messages?" → action|high|Check inbox for new messages|email_list
-"What's in my inbox?" → action|high|Check inbox for new messages|email_list
-"Reply to John's email" → action|high|Reply to John's email|email_list,email_send
-"Any meetings today?" → action|high|Check calendar for today's events|calendar_list
-"What's on my calendar?" → action|high|Check calendar for upcoming events|calendar_list
-"Schedule a call with Sarah tomorrow at 2pm" → action|high|Create calendar event: call with Sarah tomorrow 2pm|calendar_create
-"Remind me to call John at 3pm" → action|high|Set reminder: call John at 3pm|reminder_set
-"Call Alex" → action|high|Look up Alex's phone number in contacts and call them|contacts,make_phone_call
-"Call Mom and ask about dinner" → action|high|Look up Mom's number in contacts and call her to ask about dinner|contacts,make_phone_call
-"Text John hello" → action|high|Look up John's number in contacts and send WhatsApp message|contacts,send_whatsapp_message
-"Do you have Sarah's number?" → action|high|Search contacts for Sarah's phone number|contacts
-"Search for flights to NYC" → action|high|Search flights to NYC|web_search
-"yes" (after bot proposed deleting emails) → action|high|Delete the emails as proposed|email_delete
-"do it" / "go ahead" / "confirm" → action|high|Execute the proposed action|none
-"Good morning!" → conversation|high|none|none
-"Call me boss" → conversation|high|none|none
-"What's the capital of France?" → question|high|none|none
-"How does photosynthesis work?" → question|high|none|none
-"Do the thing" (no context) → clarify|low|What would you like me to do?|none"""
+"Post on X: AI is the future" → action|high|Post exact text: AI is the future|x_tool|no
+"Show presence on X" → action|high|Search X for recent AI/tech discussions and post 2-3 thoughtful replies representing principal's perspective|x_tool,web_search|yes
+"Research openclaw" → action|high|Search web and X for openclaw autonomous agent, compile findings into a report|web_search,x_tool|yes
+"Check my email" → action|high|Check inbox for new messages|email_list|no
+"Any unread emails?" → action|high|Check inbox for unread emails|email_list|no
+"Do I have messages?" → action|high|Check inbox for new messages|email_list|no
+"What's in my inbox?" → action|high|Check inbox for new messages|email_list|no
+"Reply to John's email" → action|high|Reply to John's email|email_list,email_send|no
+"Any meetings today?" → action|high|Check calendar for today's events|calendar_list|no
+"What's on my calendar?" → action|high|Check calendar for upcoming events|calendar_list|no
+"Schedule a call with Sarah tomorrow at 2pm" → action|high|Create calendar event: call with Sarah tomorrow 2pm|calendar_create|no
+"Remind me to call John at 3pm" → action|high|Set reminder: call John at 3pm|reminder_set|no
+"Call Alex" → action|high|Look up Alex's phone number in contacts and call them|contacts,make_phone_call|no
+"Call Mom and ask about dinner" → action|high|Look up Mom's number in contacts and call her to ask about dinner|contacts,make_phone_call|no
+"Text John hello" → action|high|Look up John's number in contacts and send WhatsApp message|contacts,send_whatsapp_message|no
+"Do you have Sarah's number?" → action|high|Search contacts for Sarah's phone number|contacts|no
+"Search for flights to NYC" → action|high|Search flights to NYC|web_search|no
+"yes" (after bot proposed deleting emails) → action|high|Delete the emails as proposed|email_delete|no
+"do it" / "go ahead" / "confirm" → action|high|Execute the proposed action|none|no
+"Good morning!" → conversation|high|none|none|no
+"Call me boss" → conversation|high|none|none|no
+"What's the capital of France?" → question|high|none|none|no
+"How does photosynthesis work?" → question|high|none|none|no
+"Do the thing" (no context) → clarify|low|What would you like me to do?|none|no"""
 
             # Try primary intent client (Gemini Flash via LiteLLM)
             try:
@@ -1575,12 +1584,13 @@ Examples:
             raw_response = response.content[0].text.strip()
             logger.debug(f"LLM raw intent response: {raw_response}")
 
-            # Parse "intent|confidence|inferred_task|tools" format (4 fields)
-            parts = raw_response.split("|", 3)
+            # Parse "intent|confidence|inferred_task|tools|needs_background" format (5 fields)
+            parts = raw_response.split("|", 4)
             intent_text = parts[0].strip().lower()
             confidence_text = parts[1].strip().lower() if len(parts) > 1 else "medium"
             inferred_task = parts[2].strip() if len(parts) > 2 else "none"
             tool_hints_raw = parts[3].strip() if len(parts) > 3 else "none"
+            needs_background = parts[4].strip().lower() == "yes" if len(parts) > 4 else False
 
             # Map confidence words to numbers
             confidence_map = {"high": 0.9, "medium": 0.7, "low": 0.4}
@@ -1624,6 +1634,7 @@ Examples:
                         result["inferred_task"] = inferred_task
                     if tool_hints:
                         result["tool_hints"] = tool_hints
+                    result["needs_background"] = needs_background
                     return result
 
             # Unrecognized → conversation
@@ -1634,14 +1645,9 @@ Examples:
             logger.error(f"Intent parsing failed completely: {e}")
             return {"action": "unknown", "confidence": 0.3, "parameters": {}}
 
-    # ── Background task routing keywords ────────────────────────────────────
-    _BG_KEYWORDS = frozenset([
-        "research", "gather", "compile", "investigate", "analyze", "survey",
-        "find all", "look up everything", "search for posts", "search x for",
-        "collect information", "deep dive", "study", "monitor", "track",
-        "scan all", "read all", "summarize everything", "report on",
-        "what are people saying", "what does x say", "gather info",
-    ])
+    # ── Background task routing ──────────────────────────────────────────────
+    # No keyword list — the intent classifier (LLM) sets needs_background=True
+    # when it judges the task requires 3+ tool calls or multi-step execution.
     # ── Interrupt mechanism: stop/cancel background tasks mid-execution ──────
     # Specific patterns that mean "stop the current background task"
     _TASK_INTERRUPT_PATTERNS = [
@@ -1726,40 +1732,18 @@ Examples:
                 logger.info(f"Calibration stored: {directive[:60]}")
                 break
 
-    # Actions that should always go to background
-    _BG_ACTIONS = frozenset(["research", "gather", "compile", "monitor", "survey"])
-    # Tool count threshold: if 3+ distinct tools are needed, background it
-    _BG_TOOL_THRESHOLD = 3
-
     def _is_background_task(self, message: str, intent: Dict[str, Any]) -> bool:
         """Return True if this task should be queued for background execution.
 
-        Heuristics (any one triggers background routing):
-        1. Intent action is explicitly a research/gather type
-        2. Message contains background-task keywords
-        3. Task requires 3+ distinct tools (complex multi-step workflow)
+        Routing decision is made by the intent classifier (LLM), which sets
+        needs_background=True when it judges the task requires 3+ tool calls
+        or multi-step research. No keyword heuristics needed here.
 
-        Voice calls and quick questions are never backgrounded.
+        Voice calls are never backgrounded regardless of intent.
         """
-        # Never background voice calls
-        channel = getattr(self, '_current_channel', '') or ''
-        if channel == 'voice':
+        if getattr(self, '_current_channel', '') == 'voice':
             return False
-
-        action = intent.get("action", "")
-        if action in self._BG_ACTIONS:
-            return True
-
-        msg_lower = message.lower()
-        for kw in self._BG_KEYWORDS:
-            if kw in msg_lower:
-                return True
-
-        tool_hints = intent.get("tool_hints", [])
-        if len(set(tool_hints)) >= self._BG_TOOL_THRESHOLD:
-            return True
-
-        return False
+        return intent.get("needs_background", False)
 
     async def _build_execution_plan(self, intent: Dict[str, Any], message: str) -> str:
         """Enrich intent with memory context to build a comprehensive agent task.
