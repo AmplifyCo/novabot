@@ -180,6 +180,7 @@ Models: Claude Opus/Sonnet/Haiku + SmolLM2 (local fallback)"""
         )
 
         # Initialize agent
+        grok_client = None  # Will be set below if Grok API key is configured
         logger.info("🤖 Initializing autonomous agent...")
         agent = AutonomousAgent(config, brain, gemini_client=grok_client)
         agent.start_time = datetime.now()  # Track start time for uptime
