@@ -1,28 +1,173 @@
 # Nova — the AutoBot
 
-> Your personal AI assistant that learns, remembers, and acts on your behalf.
+> A self-hosted personal AI agent that learns, remembers, and acts on your behalf.
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-Nova is a self-hosted, single-user AI assistant you run on your own server. It connects to you via Telegram, learns your preferences over time, and can take actions — send emails, post to X, manage your calendar, set reminders, browse the web, and more.
+Nova is a fully autonomous AI assistant you run on your own server. It connects to you via Telegram (and optionally voice, email, WhatsApp, and X), builds a persistent memory of who you are, and can take real-world actions on your behalf — from writing emails to making phone calls to researching the web.
 
-Unlike generic chatbots, Nova builds a memory of who you are. It remembers your communication style, preferences, and past conversations to provide increasingly personalized assistance.
+Unlike SaaS AI assistants, Nova runs entirely on infrastructure you own. Your data stays on your server.
 
 ---
 
 ## What Nova Can Do
 
-- **Conversations** — Chat naturally via Telegram with context from past interactions
-- **Email** — Read, compose, and reply to emails on your behalf
-- **Calendar** — Check, create, and manage calendar events
-- **Social Media** — Post to X (Twitter), including community posts
-- **Reminders** — Set time-based reminders that fire via Telegram notifications
-- **Web Browsing** — Browse pages with visual verification (screenshots)
-- **Web Research** — Fetch and summarize web content
-- **File Operations** — Read, write, and manage files
-- **Shell Commands** — Execute scripts and terminal commands
-- **Memory** — Learns and recalls your preferences, habits, and context
+| Capability | Details |
+|---|---|
+| **Conversations** | Natural chat via Telegram with full memory of past interactions |
+| **Email** | Read inbox, compose replies, send — on your behalf via IMAP/SMTP |
+| **Calendar** | Create, check, and manage events via CalDAV |
+| **Web Research** | Real-time search via Tavily (AI-optimised) with DuckDuckGo fallback |
+| **Web Browsing** | Load any URL with visual verification (Playwright + Chromium) |
+| **Social Media** | Post to X (Twitter) and LinkedIn via OAuth |
+| **Voice Calls** | Make and receive phone calls via Twilio — with ElevenLabs natural voice |
+| **WhatsApp** | Send and receive messages via Twilio WhatsApp |
+| **Reminders** | Set time-based reminders; Nova notifies you when they fire |
+| **Background Tasks** | Autonomous multi-step research or actions, notified on Telegram when done |
+| **File Operations** | Read, write, and manage files on the host |
+| **Shell Commands** | Execute sandboxed bash commands |
+| **Memory** | Learns your preferences, style, contacts, and conversation history |
+
+---
+
+## Architecture
+
+Nova is built around a biological metaphor — no heavyweight frameworks, pure Python + asyncio.
+
+```
+┌──────────────────────────────────────────────────────────┐
+│                   CHANNELS (Transport)                    │
+│  Telegram · WhatsApp · Voice (Twilio) · Email · X/OAuth  │
+│              Thin wrappers — zero business logic          │
+└────────────────────────┬─────────────────────────────────┘
+                         │
+┌────────────────────────▼─────────────────────────────────┐
+│                        HEART                              │
+│         ConversationManager + AutonomousAgent             │
+│                                                           │
+│  Semantic Router → LLM Intent (Gemini Flash / Haiku)      │
+│  → DistilBERT fallback → Keyword fallback                 │
+│                                                           │
+│  Model Routing:  flash · sonnet · quality tiers           │
+│  Providers:      Claude · Gemini · Grok (via LiteLLM)     │
+│  Fallback:       SmolLM2 (local, Ollama)                  │
+│                                                           │
+│  13 security layers · Circuit breaker · Rate limiting     │
+│  Context Thalamus (token budgeting + history pruning)     │
+│  Per-session locking · PII redaction · Output filtering   │
+└────────┬──────────────────────┬────────────────────────── ┘
+         │                      │
+┌────────▼────────┐   ┌─────────▼────────────────────────┐
+│     BRAIN        │   │       NERVOUS SYSTEM              │
+│                  │   │       (ExecutionGovernor)         │
+│  CoreBrain       │   │                                   │
+│  · 5 intelligence│   │  · PolicyGate — risk-based        │
+│    principles    │   │    permission checks              │
+│  · Bot identity  │   │  · StateMachine — IDLE→THINKING   │
+│  · Build memory  │   │    →EXECUTING→DONE                │
+│                  │   │  · DurableOutbox — deduplication  │
+│  DigitalClone    │   │    (no double sends)              │
+│  Brain (Memory)  │   │  · DeadLetterQueue — poison event │
+│  · Conversations │   │    handling + Telegram alerts     │
+│  · Preferences   │   └──────────────────────────────────┘
+│  · Contacts      │
+│  · Episodic mem  │
+│  · Working mem   │
+│  · Tone state    │
+└────────┬────────┘
+         │
+┌────────▼───────────────────────────────────────────────┐
+│                      TALENTS (Tools)                    │
+│                                                         │
+│  web_search  · web_fetch  · browser  · bash  · file    │
+│  email       · calendar   · reminder · contacts        │
+│  x_tool      · linkedin   · whatsapp · twilio_call     │
+│  nova_task (background queue)                          │
+│                                                         │
+│  60s timeout · auto-disable after 5 failures           │
+│  parallel execution via asyncio.gather                 │
+└────────┬───────────────────────────────────────────────┘
+         │
+┌────────▼───────────────────────────────────────────────┐
+│                  BACKGROUND SERVICES                    │
+│                                                         │
+│  ReminderScheduler   · 30s   · fire due reminders      │
+│  TaskRunner          · 15s   · autonomous multi-step   │
+│  AttentionEngine     · 6h    · proactive observations  │
+│  SelfHealingMonitor  · 5min  · detect + auto-fix       │
+│  MemoryConsolidator  · 6h    · prune old turns         │
+│  Dashboard           · always · web monitoring UI      │
+└────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Multi-Provider LLM Routing
+
+Nova routes tasks to the right model automatically — balancing speed, cost, and capability.
+
+| Tier | Providers | Used for |
+|---|---|---|
+| **flash** | Gemini 2.0 Flash → Claude Haiku → Grok | Intent classification, simple tools, reminders |
+| **sonnet** | Claude Sonnet → Gemini Flash → Grok | Conversation, tool execution, research |
+| **quality** | Claude Sonnet (retry) → Gemini 2.5 Pro | Email drafting, complex composition |
+| **local** | SmolLM2 via Ollama | Offline fallback when all APIs are down |
+
+All provider calls go through **LiteLLM** — one interface, any provider.
+
+---
+
+## Memory System
+
+Nova maintains a layered memory architecture backed by **LanceDB** (vector store):
+
+| Memory Type | What's Stored | Scope |
+|---|---|---|
+| **Working Memory** | Current tone, urgency, unfinished items | Per session (JSON) |
+| **Episodic Memory** | Action outcomes — what worked, what failed | Persistent (LanceDB) |
+| **Conversation Memory** | Full history per channel and user | Persistent (LanceDB) |
+| **Preferences** | Learned facts about you — style, habits | Persistent (LanceDB) |
+| **Contacts** | People you interact with | Persistent (LanceDB) |
+| **Identity** | Bot's core identity and principles | Persistent (LanceDB) |
+
+Third-party content (emails from others) is **summarised before storage**, never stored verbatim. Financial and health data is filtered out at ingestion.
+
+---
+
+## AGI Capabilities
+
+| Capability | File | What it does |
+|---|---|---|
+| **Tone Analyzer** | `brain/tone_analyzer.py` | Detects 5 tone registers in real-time, zero-latency |
+| **Working Memory** | `brain/working_memory.py` | Tracks momentum, urgency, and conversation state |
+| **Episodic Memory** | `brain/episodic_memory.py` | Records event-outcome pairs; builds confidence from history |
+| **Attention Engine** | `brain/attention_engine.py` | Proactive observations every 6h; notices things without being asked |
+| **Goal Decomposer** | `core/goal_decomposer.py` | Breaks complex goals into 3–7 executable subtasks |
+| **Task Runner** | `core/task_runner.py` | Autonomous background execution; notifies on Telegram when done |
+| **Intent Collector** | `brain/intent_data_collector.py` | Captures live intent labels as training data for future model fine-tuning |
+
+---
+
+## Security
+
+Nova applies **13 defence layers** to every message:
+
+1. Rate limiting per user
+2. Input sanitization (length, encoding)
+3. Prompt injection detection (LLM Security Guard)
+4. PII redaction (phone, email, SSN, IBAN, routing numbers)
+5. Trust-tier enforcement (owner vs. untrusted callers)
+6. Policy Gate (read / write / irreversible risk classification)
+7. Durable Outbox (deduplication — no double sends)
+8. Tool output injection guard
+9. Semantic relevance validation
+10. Output filtering (strip credentials, XML artefacts)
+11. Bash command blocklist (rm -rf, sudo, etc.)
+12. Circuit breaker (3 API failures → 2-minute cooldown)
+13. Dead Letter Queue (poison events → Telegram alert after 3 retries)
+
+Risk and supervision are formally documented in [`RISKS.md`](../RISKS.md) and [`SUPERVISION.md`](../SUPERVISION.md).
 
 ---
 
@@ -31,8 +176,8 @@ Unlike generic chatbots, Nova builds a memory of who you are. It remembers your 
 ### Prerequisites
 
 - Python 3.10+
-- An LLM API key — Nova supports multiple providers (see Configuration)
-- Telegram Bot Token ([create one via BotFather](https://t.me/BotFather))
+- At least one LLM provider API key (Claude, Gemini, or Grok)
+- Telegram Bot Token — [create one via BotFather](https://t.me/BotFather)
 
 ### Installation
 
@@ -46,45 +191,57 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### Setup wizard
+### Configuration
 
-Run the interactive setup wizard. It guides you through everything — including a live conversation with Nova right in your terminal:
-
-```bash
-python setup.py
-```
-
-The wizard will:
-1. Ask you to pick an LLM provider (SmolLM2 locally via Ollama, Claude, Gemini, OpenAI, or any compatible endpoint)
-2. Test your connection immediately
-3. Walk you through Telegram setup (required)
-4. Let **Nova's setup persona** guide the rest — ask what you want to do, and it recommends which features to configure (email, WhatsApp, X, calendar, voice)
-
-> **No API key? No problem.** Select SmolLM2 (option 1) to run the entire wizard locally using [Ollama](https://ollama.com) — then add a cloud key for Nova's day-to-day use.
-
-### Manual configuration
-
-If you prefer to edit `.env` directly, copy the example and fill in your values:
+Copy the example env file and fill in your values:
 
 ```bash
 cp .env.example .env
-nano .env    # or your editor of choice
+nano .env
 ```
 
-Nova works with any supported LLM provider — configure whichever you have access to:
-
+**Required:**
 ```bash
-# LLM Provider — configure one or more
-ANTHROPIC_API_KEY=your_key    # Claude (claude-sonnet, claude-haiku, ...)
-GEMINI_API_KEY=your_key       # Gemini (gemini-2.0-flash, ...)
-OPENAI_API_KEY=your_key       # OpenAI-compatible endpoints
+# Identity
+BOT_NAME=Nova
+OWNER_NAME=YourName
+
+# At least one LLM provider
+ANTHROPIC_API_KEY=sk-ant-...      # Claude (Sonnet, Haiku, Opus)
+GEMINI_API_KEY=AIza...            # Gemini Flash / Pro
+GROK_API_KEY=xai-...             # Grok (optional, used as last-resort fallback)
 
 # Telegram (required)
 TELEGRAM_BOT_TOKEN=your_bot_token
 TELEGRAM_CHAT_ID=your_chat_id
 ```
 
-Nova routes tasks to the best available model automatically and falls back gracefully when a provider is unavailable.
+**Search (recommended):**
+```bash
+TAVILY_API_KEY=tvly-...           # Free at tavily.com — 1000 searches/month
+```
+
+**Optional capabilities:**
+```bash
+# Email
+GMAIL_EMAIL=you@gmail.com
+GMAIL_APP_PASSWORD=xxxx
+
+# Voice calls (Twilio)
+TWILIO_ACCOUNT_SID=ACxxx
+TWILIO_AUTH_TOKEN=xxx
+TWILIO_PHONE_NUMBER=+1...
+ELEVENLABS_API_KEY=xxx            # Natural voice (optional; falls back to Google TTS)
+
+# WhatsApp
+TWILIO_WHATSAPP_NUMBER=whatsapp:+1...
+
+# Social Media
+X_API_KEY=xxx
+X_API_SECRET=xxx
+LINKEDIN_CLIENT_ID=xxx
+LINKEDIN_CLIENT_SECRET=xxx
+```
 
 ### Run
 
@@ -92,84 +249,160 @@ Nova routes tasks to the best available model automatically and falls back grace
 python src/main.py
 ```
 
-Nova starts and connects to Telegram. Message your bot to begin.
+Nova starts and connects to Telegram. Send it a message to begin.
 
 ---
 
-## Deployment (Amazon Linux / EC2)
+## Deployment (EC2 / Amazon Linux)
 
 ```bash
-# SSH into your instance
+# SSH in
 ssh -i your-key.pem ec2-user@your-instance-ip
 
-# Clone, install, configure
+# Clone and install
 git clone https://github.com/AmplifyCo/project-nova.git
 cd project-nova
-chmod +x deploy/ec2/setup.sh
-./deploy/ec2/setup.sh
+pip install -r requirements.txt
 
 # Configure
 nano .env
 
-# Run as a service
+# Run as a systemd service
 sudo systemctl start digital-twin
 sudo systemctl enable digital-twin
 ```
 
-### Optional: Browser Support
-
-For full web browsing with visual verification:
+### Optional: Full browser support
 
 ```bash
-sudo yum install -y xorg-x11-server-Xvfb
+sudo dnf install -y xorg-x11-server-Xvfb atk at-spi2-atk
 pip install playwright
 playwright install --with-deps chromium
 ```
 
----
-
-## Adding Talents
-
-Nova's capabilities are modular. Each talent can be enabled independently by adding the required credentials to `.env`. See `config/talents.yaml` for the full list of available and upcoming talents.
+### Update
 
 ```bash
-# Check talent status
-python -m src.setup talents
+git pull
+pip install -r requirements.txt   # pick up any new dependencies
+sudo systemctl restart digital-twin
 ```
 
 ---
 
-## Architecture
+## Tech Stack
 
-Nova is framework-free — pure Python and asyncio with no heavyweight orchestration frameworks. It is built around three layers:
-
-- **Heart** — the conversation manager that routes intent, selects the right model tier, and dispatches tool calls
-- **Brain** — a set of intelligence principles that govern how Nova thinks and acts (plan before acting, verify before done, minimal impact, etc.)
-- **Memory** — a vector-backed store of your conversations, preferences, and context, used to personalize every response
-
-Background services handle self-monitoring (error detection + auto-fix), scheduled reminders, and periodic memory consolidation.
-
-### Multi-LLM Routing
-
-Nova supports multiple LLM providers through a unified model router. Tasks are matched to models based on latency, capability, and cost requirements:
-
-| Task type | Default model tier |
+| Layer | Technology |
 |---|---|
-| Fast replies, intent classification | Flash / Haiku class |
-| Tool use, reasoning, code | Sonnet class |
-| Complex research, synthesis | Opus / Pro class |
-
-Configure your preferred providers in `.env`; Nova uses what's available.
+| **LLM providers** | Claude (Anthropic) · Gemini (Google) · Grok (xAI) via LiteLLM |
+| **Local fallback** | SmolLM2 via Ollama |
+| **Vector store** | LanceDB (ACID-compliant, crash-safe, embedded) |
+| **Embeddings** | all-MiniLM-L6-v2 (sentence-transformers) |
+| **Web search** | Tavily API (primary) · DuckDuckGo (fallback) |
+| **Transport** | python-telegram-bot · Twilio (voice + WhatsApp) |
+| **Web framework** | FastAPI + uvicorn (dashboard + webhooks) |
+| **Concurrency** | asyncio (event loop, gather, semaphores, per-user locks) |
+| **Persistence** | LanceDB (vectors) · SQLite (task queue) · JSON (reminders, outbox) |
+| **Deployment** | EC2 · systemd · public HTTPS endpoint |
 
 ---
 
-## Security
+## Data Flow Example
 
-- Single-user by design — only your Telegram chat ID can interact
-- Credentials stored in `.env`, never committed
-- Tool execution is governed by risk-based policies
-- Side effects (emails, posts) are deduplicated to prevent double-sends
-- All tool outputs are treated as untrusted data
+**"Find the top Thai restaurants in Fremont, CA"**
+
+```
+1. Telegram → Heart
+   Intent: action | confidence: high | tools: web_search | background: no
+
+2. Heart → Agent (flash tier — single tool, runs inline)
+
+3. Agent → web_search("top Thai restaurants Fremont CA")
+   → Tavily returns 5 results with addresses, ratings, summaries
+
+4. Agent synthesises → response to user
+
+5. Heart → store_conversation_turn() → LanceDB
+6. Heart → IntentDataCollector.record("Thai restaurants...", "action", 0.9)
+   → data/intent_training/samples.jsonl (training data for future fine-tuning)
+```
+
+**"Research AI funding trends and write me a summary"**
+
+```
+1. Telegram → Heart
+   Intent: action | tools: web_search, web_fetch | background: yes (2+ tools)
+
+2. Heart → enqueue background task → "Got it, I'll notify you when done"
+
+3. TaskRunner picks up → GoalDecomposer → 4 subtasks:
+   · Search recent AI funding news (Tavily)
+   · Fetch top 3 articles (web_fetch)
+   · Synthesise findings
+   · Write summary to data/tasks/{id}.txt
+
+4. TaskRunner completes → reads file → sends full content to Telegram in chunks
+```
+
+---
+
+## Project Structure
+
+```
+digital-twin/
+├── src/
+│   ├── core/
+│   │   ├── conversation_manager.py   # Heart — intent routing, model selection
+│   │   ├── agent.py                  # AutonomousAgent — ReAct execution loop
+│   │   ├── brain/
+│   │   │   ├── core_brain.py         # Intelligence principles (how to think)
+│   │   │   ├── digital_clone_brain.py # Memory (what Nova knows about you)
+│   │   │   ├── working_memory.py     # Per-session tone + state
+│   │   │   ├── episodic_memory.py    # Event-outcome history
+│   │   │   ├── attention_engine.py   # Proactive background observations
+│   │   │   ├── tone_analyzer.py      # Real-time tone detection
+│   │   │   ├── semantic_router.py    # Fast-path intent matching
+│   │   │   └── intent_data_collector.py  # Training data capture
+│   │   ├── tools/
+│   │   │   ├── search.py             # Tavily + DuckDuckGo web search
+│   │   │   ├── web.py                # Direct URL fetch
+│   │   │   ├── browser.py            # Playwright headless browser
+│   │   │   ├── email_tool.py         # IMAP/SMTP
+│   │   │   ├── calendar_tool.py      # CalDAV
+│   │   │   ├── x_tool.py             # X / Twitter
+│   │   │   ├── linkedin_tool.py      # LinkedIn
+│   │   │   ├── twilio_call.py        # Outbound voice calls
+│   │   │   ├── reminder_tool.py      # Scheduled reminders
+│   │   │   ├── contacts_tool.py      # Contact management
+│   │   │   └── nova_task_tool.py     # Background task queue interface
+│   │   ├── nervous_system/
+│   │   │   ├── execution_governor.py # Central coordinator
+│   │   │   ├── policy_gate.py        # Risk-based permission checks
+│   │   │   ├── outbox.py             # Durable deduplication
+│   │   │   ├── dead_letter_queue.py  # Poison event handling
+│   │   │   └── state_machine.py      # Agent execution states
+│   │   ├── task_queue.py             # SQLite-backed task persistence
+│   │   ├── task_runner.py            # Background autonomous executor
+│   │   └── goal_decomposer.py        # LLM-based goal decomposition
+│   ├── channels/
+│   │   ├── telegram_channel.py       # Telegram transport
+│   │   ├── twilio_voice_channel.py   # Voice call handling
+│   │   └── twilio_whatsapp_channel.py # WhatsApp transport
+│   ├── integrations/
+│   │   ├── anthropic_client.py       # Claude API wrapper
+│   │   ├── gemini_client.py          # Gemini via LiteLLM
+│   │   ├── grok_client.py            # Grok (xAI) via LiteLLM
+│   │   └── model_router.py           # Model tier selection
+│   └── main.py                       # Entry point + service wiring
+├── data/
+│   ├── lancedb/                      # Vector memories (conversations, preferences)
+│   ├── intent_training/              # Intent classification training data (JSONL)
+│   ├── tasks/                        # Background task output files
+│   └── conversations/                # Daily conversation logs (JSONL)
+├── RISKS.md                          # Formal risk register
+├── SUPERVISION.md                    # Supervision methods documentation
+└── requirements.txt
+```
 
 ---
 
@@ -179,8 +412,8 @@ MIT — see [LICENSE](LICENSE) for details.
 
 ## Disclaimer
 
-Nova is an autonomous AI assistant with real-world capabilities (sending emails, posting to social media, executing commands). Always review its configuration and monitor its behavior, especially when first deploying.
+Nova is an autonomous AI agent with real-world capabilities — it can send emails, post to social media, make phone calls, and execute shell commands. Monitor its behaviour, especially during initial deployment. Review [`RISKS.md`](../RISKS.md) for a full analysis of known risks and mitigations.
 
 ---
 
-Vector memory powered by [LanceDB](https://lancedb.com/)
+*Vector memory powered by [LanceDB](https://lancedb.com/) · Search powered by [Tavily](https://tavily.com/)*
