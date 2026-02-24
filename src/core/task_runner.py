@@ -44,6 +44,7 @@ class TaskRunner:
         whatsapp_channel=None,       # TwilioWhatsAppChannel (for WhatsApp notifications)
         critic=None,                 # CriticAgent (validates results before delivery)
         template_library=None,       # ReasoningTemplateLibrary (stores successful decompositions)
+        owner_whatsapp_number: str = "",  # Fallback WhatsApp number from .env for task notifications
     ):
         self.task_queue = task_queue
         self.goal_decomposer = goal_decomposer
@@ -53,6 +54,7 @@ class TaskRunner:
         self.whatsapp_channel = whatsapp_channel
         self.critic = critic
         self.template_library = template_library
+        self.owner_whatsapp_number = owner_whatsapp_number
         self._running = False
         self._current_task_id: Optional[str] = None
         Path("./data/tasks").mkdir(parents=True, exist_ok=True)
@@ -324,17 +326,21 @@ class TaskRunner:
         except Exception as e:
             logger.warning(f"Telegram notification failed: {e}")
 
-        # WhatsApp notification — send_message() is sync, run in thread
-        if self.whatsapp_channel and task.user_id:
-            wa_msg = f"✅ Done!\n\n{full_content[:1200]}"
-            try:
-                await asyncio.to_thread(
-                    self.whatsapp_channel.send_message, task.user_id, wa_msg
-                )
-            except Exception as e:
-                logger.warning(f"WhatsApp notification failed: {e}")
-        elif not self.whatsapp_channel:
-            logger.debug("WhatsApp channel not configured, skipping WhatsApp notification")
+        # WhatsApp notification — resolve destination number
+        # Prefer task.user_id if it looks like a phone number (set when task queued from WhatsApp),
+        # otherwise fall back to the configured owner number (first of WHATSAPP_ALLOWED_NUMBERS).
+        if self.whatsapp_channel:
+            wa_to = task.user_id if (task.user_id or "").startswith(("whatsapp:", "+")) else self.owner_whatsapp_number
+            if wa_to:
+                wa_msg = f"✅ Done!\n\n{full_content[:1200]}"
+                try:
+                    await asyncio.to_thread(
+                        self.whatsapp_channel.send_message, wa_to, wa_msg
+                    )
+                except Exception as e:
+                    logger.warning(f"WhatsApp notification failed: {e}")
+            else:
+                logger.debug("WhatsApp channel configured but no owner number available — skipping")
 
     async def _send_chunked_telegram(self, header: str, content: str):
         """Send a potentially long message to Telegram in 3800-char chunks.

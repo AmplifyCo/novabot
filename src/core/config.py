@@ -99,6 +99,9 @@ def load_config(env_file: str = ".env", config_file: str = "config/agent.yaml") 
         whatsapp_verify_token=os.getenv("WHATSAPP_VERIFY_TOKEN"),
         whatsapp_allowed_numbers=os.getenv("WHATSAPP_ALLOWED_NUMBERS", "").split(",") if os.getenv("WHATSAPP_ALLOWED_NUMBERS") else [],
 
+        # iOS Shortcut / direct API
+        nova_api_key=os.getenv("NOVA_API_KEY"),
+
         # Identity
         bot_name=os.getenv("BOT_NAME", "Nova"),
         owner_name=os.getenv("OWNER_NAME", "User"),

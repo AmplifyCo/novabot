@@ -99,6 +99,9 @@ class AgentConfig:
     whatsapp_verify_token: Optional[str] = None
     whatsapp_allowed_numbers: List[str] = field(default_factory=list)
 
+    # iOS Shortcut / direct API access
+    nova_api_key: Optional[str] = None          # Bearer token for POST /nova/chat
+
     dashboard_enabled: bool = True
     dashboard_host: str = "0.0.0.0"
     dashboard_port: int = 18789

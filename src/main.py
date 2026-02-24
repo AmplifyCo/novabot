@@ -473,6 +473,10 @@ Models: Claude Opus/Sonnet/Haiku + SmolLM2 (local fallback)"""
             if twilio_voice_channel and twilio_voice_channel.enabled:
                 logger.info("📞 Twilio Voice interface initialized")
 
+        # Register Nova API key for iOS Shortcut endpoint
+        if config.nova_api_key and dashboard.enabled:
+            dashboard.set_nova_api_key(config.nova_api_key)
+
         # Start dashboard server (non-blocking)
         dashboard_task = None
         if config.dashboard_enabled and dashboard.enabled:
@@ -498,6 +502,8 @@ Models: Claude Opus/Sonnet/Haiku + SmolLM2 (local fallback)"""
             )
             _template_library = ReasoningTemplateLibrary(db_path="./data/lancedb")
 
+            # Use first of WHATSAPP_ALLOWED_NUMBERS as owner's fallback notification address
+            _owner_wa = (config.whatsapp_allowed_numbers or [""])[0] if config.whatsapp_allowed_numbers else ""
             _task_runner = TaskRunner(
                 task_queue=task_queue,
                 goal_decomposer=goal_decomposer,
@@ -507,6 +513,7 @@ Models: Claude Opus/Sonnet/Haiku + SmolLM2 (local fallback)"""
                 whatsapp_channel=_whatsapp_ch,
                 critic=_critic,
                 template_library=_template_library,
+                owner_whatsapp_number=_owner_wa,
             )
             # Wire template_library into goal_decomposer for reuse on future tasks
             goal_decomposer.template_library = _template_library

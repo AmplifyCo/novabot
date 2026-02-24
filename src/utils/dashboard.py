@@ -158,6 +158,10 @@ class Dashboard:
         self.twilio_voice_chat = twilio_voice_chat
         logger.info("Twilio Voice chat handler registered with dashboard")
 
+    def set_nova_api_key(self, api_key: str):
+        self._nova_api_key = api_key
+        logger.info("Nova API key configured (POST /nova/chat enabled)")
+
     def set_conversation_manager(self, cm, owner_chat_id=None):
         """Wire the conversation manager so dashboard chat routes through it."""
         self._conversation_manager = cm
@@ -412,6 +416,51 @@ class Dashboard:
             twiml = await self.twilio_whatsapp_chat.handle_webhook(form_data)
             return FR(content=twiml, media_type="text/xml")
 
+        # ── iOS Shortcut / direct API ─────────────────────────────────
+        @app.post("/nova/chat")
+        async def nova_chat(request: Request):
+            """Bearer-token-protected endpoint for iOS Shortcuts and direct API access.
+
+            Request:
+              Authorization: Bearer <NOVA_API_KEY>
+              Content-Type: application/json
+              {"message": "what's on my calendar?"}
+
+            Response:
+              {"response": "You have 3 meetings today..."}
+            """
+            api_key = getattr(self, "_nova_api_key", "") or ""
+            if not api_key:
+                return self.JSONResponse({"error": "API key not configured"}, status_code=503)
+
+            auth = request.headers.get("Authorization", "")
+            if not auth.startswith("Bearer ") or auth[len("Bearer "):] != api_key:
+                logger.warning(f"Unauthorized /nova/chat attempt from {request.client.host if request.client else 'unknown'}")
+                return self.JSONResponse({"error": "Unauthorized"}, status_code=401)
+
+            try:
+                body = await request.json()
+            except Exception:
+                return self.JSONResponse({"error": "Invalid JSON body"}, status_code=400)
+
+            message = (body.get("message") or "").strip()
+            if not message:
+                return self.JSONResponse({"error": "'message' is required"}, status_code=400)
+
+            if not self._conversation_manager:
+                return self.JSONResponse({"error": "Not ready yet"}, status_code=503)
+
+            try:
+                response = await self._conversation_manager.process_message(
+                    message=message,
+                    channel="shortcut",
+                    user_id="owner",
+                )
+                return self.JSONResponse({"response": response})
+            except Exception as e:
+                logger.error(f"/nova/chat error: {e}", exc_info=True)
+                return self.JSONResponse({"error": "Internal error"}, status_code=500)
+
         # ── Audio file serving ────────────────────────────────────────
         @app.get("/audio/{filename}")
         async def serve_audio(filename: str):
@@ -602,6 +651,8 @@ sudo systemctl restart digital-twin</pre>
         logger.info(f"Telegram webhook endpoint: http://{self.host}:{self.port}/telegram/webhook")
         logger.info(f"Twilio WhatsApp webhook: http://{self.host}:{self.port}/twilio/whatsapp")
         logger.info(f"Twilio Voice webhook: http://{self.host}:{self.port}/twilio/voice")
+        if getattr(self, "_nova_api_key", ""):
+            logger.info(f"Nova chat API (iOS Shortcut): http://{self.host}:{self.port}/nova/chat")
         await server.serve()
 
     # ── HTML pages ─────────────────────────────────────────────────────
