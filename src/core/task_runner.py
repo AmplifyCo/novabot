@@ -84,12 +84,7 @@ class TaskRunner:
 
         # Notify owner on Telegram that the task has started (RISK-O06 — SM-06 gap)
         try:
-            start_msg = (
-                f"🚀 Background task started\n\n"
-                f"Goal: {self._safe(task.goal, 150)}\n"
-                f"Task ID: {task.id}\n\n"
-                f"I'll update you step by step."
-            )
+            start_msg = f"🚀 Task started: {self._safe(task.goal, 80)}"
             await self.telegram.notify(start_msg, level="info")
         except Exception as e:
             logger.warning(f"Task-started notification failed: {e}")
@@ -277,33 +272,28 @@ class TaskRunner:
         return text[:limit].replace("*", "").replace("_", "").replace("`", "").replace("[", "").replace("]", "")
 
     async def _notify_plan(self, task: Task, subtasks: list):
-        """Tell the user the plan right after decomposition."""
-        lines = [f"📋 Plan for: {self._safe(task.goal, 120)}\n"]
-        for i, st in enumerate(subtasks, 1):
-            lines.append(f"  {i}. {self._safe(st.description, 80)}")
+        """Send a compact numbered plan after decomposition."""
+        steps = " | ".join(f"{i}. {self._safe(st.description, 40)}" for i, st in enumerate(subtasks, 1))
+        msg = f"📋 {len(subtasks)} steps: {steps}"
         try:
-            await self.telegram.notify("\n".join(lines), level="info")
+            await self.telegram.notify(msg, level="info")
         except Exception as e:
             logger.warning(f"Telegram plan notification failed: {e}")
 
     async def _notify_step_start(self, task: Task, step: int, total: int, description: str):
         """Notify that a step is starting."""
-        msg = f"🔄 Step {step}/{total}: {self._safe(description, 120)}"
+        msg = f"🔄 [{step}/{total}] {self._safe(description, 80)}"
         try:
             await self.telegram.notify(msg, level="info")
         except Exception as e:
             logger.warning(f"Telegram step-start notification failed: {e}")
 
     async def _notify_step_done(self, task: Task, step: int, total: int, result: str, failed: bool):
-        """Notify step completion — success or failure — with safe plain text."""
+        """Notify step completion with a one-line outcome."""
         if failed:
-            icon = "❌"
-            preview = self._safe(result.removeprefix("ERROR:").strip(), 180)
-            msg = f"{icon} Step {step}/{total} FAILED: {preview}"
+            msg = f"❌ [{step}/{total}] {self._safe(result.removeprefix('ERROR:').strip(), 100)}"
         else:
-            icon = "✅"
-            preview = self._safe(result, 180)
-            msg = f"{icon} Step {step}/{total} done: {preview}"
+            msg = f"✅ [{step}/{total}] {self._safe(result, 100)}"
         try:
             await self.telegram.notify(msg, level="info")
         except Exception as e:
@@ -326,10 +316,7 @@ class TaskRunner:
         except Exception as e:
             logger.warning(f"Could not read task file {file_path}: {e}")
 
-        header = (
-            f"✅ Task complete\n\n"
-            f"Goal: {self._safe(task.goal, 150)}\n\n"
-        )
+        header = f"✅ Done: {self._safe(task.goal, 80)}\n\n"
 
         # Send full content via Telegram in chunks (Telegram limit: 4096 chars)
         try:
@@ -369,12 +356,7 @@ class TaskRunner:
 
     async def _notify_failure(self, task: Task, error: str):
         """Notify user when a task fails on both Telegram and WhatsApp."""
-        msg = (
-            f"❌ Task failed\n\n"
-            f"Goal: {self._safe(task.goal, 100)}\n"
-            f"Error: {self._safe(error, 200)}\n\n"
-            f"Please try again or rephrase the request."
-        )
+        msg = f"❌ Task failed: {self._safe(task.goal, 60)}\nReason: {self._safe(error, 120)}"
         try:
             await self.telegram.notify(msg, level="warning")
         except Exception as e:
