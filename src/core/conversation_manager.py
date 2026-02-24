@@ -309,7 +309,7 @@ class ConversationManager:
             async with session_lock:
                 return await self._process_message_locked(
                     message, channel, user_id, metadata,
-                    progress_callback, enable_periodic_updates
+                    progress_callback, enable_periodic_updates, raw_contact
                 )
 
         except Exception as e:
@@ -523,7 +523,8 @@ class ConversationManager:
         user_id: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None,
         progress_callback=None,
-        enable_periodic_updates: bool = False
+        enable_periodic_updates: bool = False,
+        raw_contact: Optional[str] = None,
     ) -> str:
         """Internal message processing (runs under per-session lock)."""
         try:
