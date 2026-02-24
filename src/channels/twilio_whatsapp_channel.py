@@ -107,6 +107,7 @@ class TwilioWhatsAppChannel:
                 channel="whatsapp",
                 user_id=user_id,
                 enable_periodic_updates=False,
+                raw_contact=from_number,  # actual phone for task notification routing
             )
             self.send_message(to=from_number, body=ai_response)
         except Exception as e:

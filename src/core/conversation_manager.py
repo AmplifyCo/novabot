@@ -274,7 +274,8 @@ class ConversationManager:
         user_id: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None,
         progress_callback=None,
-        enable_periodic_updates: bool = False
+        enable_periodic_updates: bool = False,
+        raw_contact: Optional[str] = None,
     ) -> str:
         """Process a message and return response.
 
@@ -536,6 +537,7 @@ class ConversationManager:
             # Store channel + callback + user for use by other methods
             self._current_channel = channel
             self._current_user_id = user_id or channel  # Track who we're talking to
+            self._current_raw_contact = raw_contact or ""  # Raw routing address (e.g. phone number)
             self._progress_callback = progress_callback
 
             # Start periodic updates ONLY if enabled (default: disabled)
@@ -846,12 +848,15 @@ class ConversationManager:
             goal = inferred_task or message
             channel = getattr(self, '_current_channel', 'telegram') or 'telegram'
             user_id = getattr(self, '_current_user_id', '') or ''
-            task_id = self.task_queue.enqueue(goal=goal, channel=channel, user_id=user_id)
+            # Use raw_contact (actual phone number) as notification address when available,
+            # so WhatsApp task completion notifications route correctly.
+            notification_address = getattr(self, '_current_raw_contact', '') or user_id
+            task_id = self.task_queue.enqueue(goal=goal, channel=channel, user_id=notification_address)
 
             # Update nova_task tool context so it knows the current user
             nova_tool = self.agent.tools.tools.get("nova_task")
             if nova_tool:
-                nova_tool.set_context(channel=channel, user_id=user_id)
+                nova_tool.set_context(channel=channel, user_id=notification_address)
 
             pending = self.task_queue.get_pending_count()
             logger.info(f"Background task enqueued: {task_id} — {goal[:60]}")
