@@ -1496,11 +1496,11 @@ User says "good morning" → none"""
                 user_msg = turn.get("user_message", "")
                 bot_msg = turn.get("assistant_response", "")
                 if user_msg:
-                    # Use cached summary if already computed, else compress now
-                    if "user_compressed" not in turn:
-                        turn["user_compressed"] = await self._compress_turn_text(user_msg, 200)
-                    history_lines.append(f"User: {turn['user_compressed']}")
+                    # User messages are typically short — just truncate, no Gemini call needed
+                    user_text = user_msg[:200] + "…" if len(user_msg) > 200 else user_msg
+                    history_lines.append(f"User: {user_text}")
                 if bot_msg:
+                    # Nova responses can be long — summarize with Gemini, cache result
                     if "bot_compressed" not in turn:
                         turn["bot_compressed"] = await self._compress_turn_text(bot_msg, 600)
                     history_lines.append(f"{self.bot_name}: {turn['bot_compressed']}")
@@ -1526,7 +1526,8 @@ User says "good morning" → none"""
                 user_msg = turn.get("user_message", "")
                 bot_msg = turn.get("assistant_response", "")
                 if user_msg:
-                    history_lines.append(f"User: {await self._compress_turn_text(user_msg, 200)}")
+                    user_text = user_msg[:200] + "…" if len(user_msg) > 200 else user_msg
+                    history_lines.append(f"User: {user_text}")
                 if bot_msg:
                     history_lines.append(f"{self.bot_name}: {await self._compress_turn_text(bot_msg, 600)}")
 

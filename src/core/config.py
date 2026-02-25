@@ -69,7 +69,7 @@ def load_config(env_file: str = ".env", config_file: str = "config/agent.yaml") 
         max_iterations=int(os.getenv("MAX_ITERATIONS", yaml_config.get("agent", {}).get("execution", {}).get("max_iterations", 50))),
         timeout_seconds=int(os.getenv("TIMEOUT_SECONDS", yaml_config.get("agent", {}).get("execution", {}).get("timeout_seconds", 300))),
         retry_attempts=int(os.getenv("RETRY_ATTEMPTS", yaml_config.get("agent", {}).get("execution", {}).get("retry_attempts", 3))),
-        self_build_mode=os.getenv("SELF_BUILD_MODE", "true").lower() == "true",
+        self_build_mode=os.getenv("SELF_BUILD_MODE", "false").lower() == "true",
 
         # Brain
         vector_db_path=os.getenv("VECTOR_DB_PATH", "./data/lancedb"),
