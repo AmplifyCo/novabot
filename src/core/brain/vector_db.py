@@ -132,11 +132,17 @@ class VectorDatabase:
         logger.debug(f"Stored document {doc_id}")
         return doc_id
 
+    @staticmethod
+    def _escape_lance_string(value: str) -> str:
+        """Escape a string for use in LanceDB filter expressions."""
+        return value.replace("'", "''")
+
     def _upsert(self, record: dict, doc_id: str):
         """Insert or update a record."""
         try:
             # Try to delete existing record with same ID first
-            self.table.delete(f"id = '{doc_id}'")
+            safe_id = self._escape_lance_string(doc_id)
+            self.table.delete(f"id = '{safe_id}'")
         except Exception:
             pass  # Table might be empty or ID doesn't exist
 
@@ -146,14 +152,21 @@ class VectorDatabase:
         self,
         query: str,
         n_results: int = 5,
-        filter_metadata: Optional[Dict[str, Any]] = None
+        filter_metadata: Optional[Dict[str, Any]] = None,
+        distance_threshold: Optional[float] = None
     ) -> List[Dict[str, Any]]:
         """Semantic search for relevant memories (non-blocking).
 
         Args:
             query: Search query
             n_results: Number of results to return
-            filter_metadata: Optional metadata filter (not used with LanceDB simple mode)
+            filter_metadata: Optional metadata filter applied via LanceDB where() clause.
+                             Keys are JSON metadata fields, values are exact-match strings.
+                             Example: {"type": "conversation"} filters to records where
+                             metadata JSON contains "type"="conversation".
+            distance_threshold: Optional max L2 distance. Results farther than this
+                                are discarded. Lower = stricter (0.0 = exact match).
+                                Typical useful range: 0.5 (strict) to 1.2 (loose).
 
         Returns:
             List of matching documents with metadata and distances
@@ -161,10 +174,22 @@ class VectorDatabase:
         loop = asyncio.get_event_loop()
         try:
             query_vector = self._embed(query)
-            results = await loop.run_in_executor(
-                None,
-                lambda: self.table.search(query_vector).limit(n_results).to_list()
-            )
+
+            def _do_search():
+                builder = self.table.search(query_vector)
+                # Apply metadata filter via SQL where() clause on JSON fields
+                if filter_metadata:
+                    conditions = []
+                    for key, value in filter_metadata.items():
+                        safe_key = self._escape_lance_string(key)
+                        safe_val = self._escape_lance_string(str(value))
+                        # Match inside the JSON-encoded metadata string
+                        conditions.append(f"metadata LIKE '%\"{safe_key}\": \"{safe_val}\"%'")
+                    if conditions:
+                        builder = builder.where(" AND ".join(conditions))
+                return builder.limit(n_results).to_list()
+
+            results = await loop.run_in_executor(None, _do_search)
         except Exception as e:
             logger.warning(f"LanceDB search failed: {e}")
             return []
@@ -172,6 +197,11 @@ class VectorDatabase:
         # Format results to match old ChromaDB interface
         matches = []
         for row in results:
+            dist = row.get("_distance", 0.0)
+            # Skip results beyond the distance threshold (irrelevant matches)
+            if distance_threshold is not None and dist > distance_threshold:
+                continue
+
             try:
                 meta = json.loads(row.get("metadata", "{}"))
             except (json.JSONDecodeError, TypeError):
@@ -180,11 +210,11 @@ class VectorDatabase:
             matches.append({
                 "text": row.get("text", ""),
                 "metadata": meta,
-                "distance": row.get("_distance", 0.0),
+                "distance": dist,
                 "id": row.get("id", None)
             })
 
-        logger.debug(f"Found {len(matches)} matches for query")
+        logger.debug(f"Found {len(matches)} matches for query (threshold={distance_threshold})")
         return matches
 
     def count(self) -> int:
@@ -208,9 +238,11 @@ class VectorDatabase:
         try:
             if ids:
                 for did in ids:
-                    self.table.delete(f"id = '{did}'")
+                    safe_id = self._escape_lance_string(did)
+                    self.table.delete(f"id = '{safe_id}'")
             elif doc_id:
-                self.table.delete(f"id = '{doc_id}'")
+                safe_id = self._escape_lance_string(doc_id)
+                self.table.delete(f"id = '{safe_id}'")
             logger.debug(f"Deleted document(s)")
         except Exception as e:
             logger.warning(f"LanceDB delete failed: {e}")

@@ -155,8 +155,23 @@ class GoalDecomposer:
             logger.error(f"GoalDecomposer error: {e}", exc_info=True)
             return self._make_fallback(goal, task_id)
 
+    # Known registered tool names — tool_hints are validated against this set
+    _VALID_TOOL_NAMES = {
+        "bash", "file_operations", "web_search", "web_fetch", "browser",
+        "email", "calendar", "x_tool", "reminder", "nova_task", "contacts",
+        "linkedin", "send_whatsapp_message", "make_phone_call", "clock",
+    }
+    _VALID_MODEL_TIERS = {"flash", "haiku", "sonnet", "opus"}
+    _MAX_DESCRIPTION_LENGTH = 500  # Cap to prevent prompt injection via long descriptions
+
     def _parse_json(self, text: str, task_id: str) -> List[Subtask]:
-        """Parse JSON array from LLM response into Subtask objects."""
+        """Parse JSON array from LLM response into Subtask objects.
+
+        Validates and sanitizes all fields from the LLM output:
+        - tool_hints: only registered tool names allowed
+        - model_tier: must be a valid tier
+        - description: capped at _MAX_DESCRIPTION_LENGTH chars
+        """
         # Strip markdown fences if present
         text = text.strip()
         if text.startswith("```"):
@@ -174,12 +189,21 @@ class GoalDecomposer:
                 desc = item.get("description", "").strip()
                 if not desc:
                     continue
+                # Sanitize: cap description length
+                desc = desc[:self._MAX_DESCRIPTION_LENGTH]
+                # Sanitize: only allow registered tool names
+                raw_hints = item.get("tool_hints", [])
+                valid_hints = [h for h in raw_hints if h in self._VALID_TOOL_NAMES]
+                # Sanitize: validate model tier
+                tier = item.get("model_tier", "flash")
+                if tier not in self._VALID_MODEL_TIERS:
+                    tier = "flash"
                 subtasks.append(Subtask(
                     description=desc,
-                    tool_hints=item.get("tool_hints", []),
-                    model_tier=item.get("model_tier", "flash"),
+                    tool_hints=valid_hints,
+                    model_tier=tier,
                     status="pending",
-                    verification_criteria=item.get("verification_criteria", ""),
+                    verification_criteria=item.get("verification_criteria", "")[:200],
                     reversible=item.get("reversible", True),
                     depends_on=item.get("depends_on", []),
                 ))

@@ -1,12 +1,48 @@
 """Web search and fetch tool."""
 
+import ipaddress
 import aiohttp
 import logging
+from urllib.parse import urlparse
 from typing import Optional
 from .base import BaseTool
 from ..types import ToolResult
 
 logger = logging.getLogger(__name__)
+
+# SSRF protection — block requests to private/internal networks
+_BLOCKED_NETWORKS = [
+    ipaddress.ip_network("127.0.0.0/8"),       # Loopback
+    ipaddress.ip_network("10.0.0.0/8"),         # Private Class A
+    ipaddress.ip_network("172.16.0.0/12"),      # Private Class B
+    ipaddress.ip_network("192.168.0.0/16"),     # Private Class C
+    ipaddress.ip_network("169.254.0.0/16"),     # Link-local / AWS metadata
+    ipaddress.ip_network("100.64.0.0/10"),      # Carrier-grade NAT
+    ipaddress.ip_network("0.0.0.0/8"),          # "This" network
+    ipaddress.ip_network("::1/128"),            # IPv6 loopback
+    ipaddress.ip_network("fc00::/7"),           # IPv6 private
+    ipaddress.ip_network("fe80::/10"),          # IPv6 link-local
+]
+
+
+def _is_private_url(url: str) -> bool:
+    """Check if a URL points to a private/internal IP address."""
+    try:
+        parsed = urlparse(url)
+        hostname = parsed.hostname or ""
+        # Block common internal hostnames
+        if hostname in ("localhost", "metadata.google.internal"):
+            return True
+        # Resolve and check IP
+        import socket
+        for info in socket.getaddrinfo(hostname, None):
+            addr = ipaddress.ip_address(info[4][0])
+            for net in _BLOCKED_NETWORKS:
+                if addr in net:
+                    return True
+    except (ValueError, socket.gaierror, OSError):
+        pass  # If we can't resolve, allow the request (will fail naturally)
+    return False
 
 
 class WebTool(BaseTool):
@@ -36,6 +72,14 @@ class WebTool(BaseTool):
             ToolResult with fetched content
         """
         try:
+            # SSRF protection — block private/internal network access
+            if _is_private_url(url):
+                logger.warning(f"SSRF blocked: {url}")
+                return ToolResult(
+                    success=False,
+                    error="Cannot fetch internal/private network addresses"
+                )
+
             logger.info(f"Fetching URL: {url}")
 
             async with aiohttp.ClientSession() as session:

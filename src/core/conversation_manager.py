@@ -50,8 +50,6 @@ from src.core.brain import tone_analyzer as _tone_analyzer
 from src.core.brain.episodic_memory import EpisodicMemory
 from src.core.brain.intent_data_collector import IntentDataCollector
 
-from transformers import pipeline
-
 logger = logging.getLogger(__name__)
 
 
@@ -130,9 +128,10 @@ class ConversationManager:
         self.PROMPT_VERSION = "2.0"  # Bump when system prompt changes significantly
         self.TOOL_SCHEMA_VERSION = "1.1"  # Bump when tool definitions change
 
-        # Last bot response stored in full (untruncated) — passed to intent LLM so it
+        # Last bot response stored per-user (untruncated) — passed to intent LLM so it
         # can understand "yes"/"do it" without history truncation losing the proposal.
-        self._last_bot_response: Optional[str] = None
+        # Dict[user_id → str] — prevents cross-user context leakage.
+        self._last_bot_responses: Dict[str, str] = {}
 
         # In-memory conversation buffer: per-user, reliable short-term context
         # Dict[user_id, deque] — each user gets their own isolated history
@@ -158,13 +157,11 @@ class ConversationManager:
         # Public reference to the AutonomousAgent for async background delegation
         self.agent = agent
 
-        # DistilBERT for intent classification (placeholder - replace with fine-tuned model path)
-        try:
-            self.intent_classifier = pipeline("text-classification", model="distilbert-base-uncased-finetuned-sst-2-english", device=-1)  # CPU
-            logger.info("DistilBERT intent classifier loaded (placeholder model)")
-        except Exception as e:
-            logger.warning(f"Failed to load DistilBERT: {e}. Falling back to keyword matching.")
-            self.intent_classifier = None
+        # Intent classifier placeholder — DistilBERT SST-2 was removed because
+        # it is a sentiment model (positive/negative), not an intent classifier.
+        # Using it for intent routing produced wrong results and wasted ~250MB RAM.
+        # Intent classification now relies on Claude Haiku → keyword fallback.
+        self.intent_classifier = None
 
         # Task queue for background autonomous execution (injected by main.py)
         self.task_queue = None
@@ -227,16 +224,12 @@ class ConversationManager:
                         except json.JSONDecodeError:
                             continue
 
-            # Restore last bot response from the most recent turn overall
-            # (find the latest turn across all users)
-            latest = None
-            for buf in self._conversation_buffers.values():
+            # Restore last bot response per-user from today's conversation buffers
+            for uid, buf in self._conversation_buffers.items():
                 if buf:
-                    last = buf[-1]
-                    if latest is None or last.get("timestamp", "") > latest.get("timestamp", ""):
-                        latest = last
-            if latest:
-                self._last_bot_response = latest.get("assistant_response")
+                    last_response = buf[-1].get("assistant_response")
+                    if last_response:
+                        self._last_bot_responses[uid] = last_response
 
             logger.info(f"Loaded {count} conversation turns for {len(self._conversation_buffers)} user(s) from today's log")
         except Exception as e:
@@ -511,7 +504,7 @@ class ConversationManager:
             }
             self._conversation_buffers[user_id].append(turn)
             self._save_to_daily_log(turn)
-            self._last_bot_response = response_text
+            self._last_bot_responses[user_id] = response_text
 
             elapsed = time.time() - start_time
             logger.info(f"[voice-fast] {elapsed:.2f}s | model={self._last_model_used} | user={user_id}")
@@ -672,8 +665,9 @@ class ConversationManager:
                     detected_tone=tone_register,
                 )
 
-            # Keep full last response for "yes"/"do it" understanding
-            self._last_bot_response = filtered_response
+            # Keep full last response per-user for "yes"/"do it" understanding
+            _uid = self._current_user_id or user_id
+            self._last_bot_responses[_uid] = filtered_response
 
             elapsed = time.time() - start_time
             logger.info(f"[{trace_id}] Completed in {elapsed:.2f}s | model={self._last_model_used} | channel={channel} | prompt_v={self.PROMPT_VERSION}")
@@ -691,7 +685,8 @@ class ConversationManager:
                 except asyncio.CancelledError:
                     pass
 
-            return f"❌ Error: {str(e)}"
+            logger.error(f"Inner processing error: {e}", exc_info=True)
+            return "I ran into an issue processing that. Please try again in a moment."
 
     def _is_circuit_open(self) -> bool:
         """Check if circuit breaker is tripped (too many recent API failures)."""
@@ -811,25 +806,42 @@ class ConversationManager:
         "describe", "tell me about", "what is",
     ]
 
+    @staticmethod
+    def _word_match(keywords, text_lower: str) -> bool:
+        """Check if any keyword appears as a whole word/phrase in text.
+
+        Uses word boundaries to prevent false positives like
+        'why' matching 'highway' or 'list' matching 'listen'.
+        Multi-word phrases (e.g. 'write email') use simple substring match.
+        """
+        import re
+        for kw in keywords:
+            if " " in kw:
+                # Multi-word phrase: substring match is fine (low false-positive risk)
+                if kw in text_lower:
+                    return True
+            else:
+                # Single word: require word boundaries
+                if re.search(rf"\b{re.escape(kw)}\b", text_lower):
+                    return True
+        return False
+
     def _get_model_tier(self, message: str) -> str:
         """Classify message into model tier: flash (default), haiku, sonnet, or quality."""
         msg_lower = message.lower()
-        
+
         # 1. Quality Tier (High-stakes communication)
-        for kw in self._QUALITY_KEYWORDS:
-            if kw in msg_lower:
-                return "quality"
-                
+        if self._word_match(self._QUALITY_KEYWORDS, msg_lower):
+            return "quality"
+
         # 2. Sonnet Tier (Complex reasoning/coding)
-        for kw in self._COMPLEX_KEYWORDS:
-            if kw in msg_lower:
-                return "sonnet"
+        if self._word_match(self._COMPLEX_KEYWORDS, msg_lower):
+            return "sonnet"
 
         # 3. Haiku Tier (Creative/Moderate)
-        for kw in self._HAIKU_KEYWORDS:
-            if kw in msg_lower:
-                return "haiku"
-                
+        if self._word_match(self._HAIKU_KEYWORDS, msg_lower):
+            return "haiku"
+
         # 4. Flash Tier (Default for 24/7 operations)
         # Handles: reminders, calendar, contacts, simple queries, chit-chat
         return "flash"
@@ -921,9 +933,9 @@ class ConversationManager:
             # Explicit or inferred action — needs tools
             model_tier = self._get_model_tier(message)
             logger.info(f"Action [{model_tier}] - using agent with tools (inferred: {inferred_task or 'direct'})")
-            
-            # Build context-aware system prompt
-            system_prompt = await self._build_system_prompt(intent)
+
+            # Build context-aware system prompt (pass message string, not intent dict)
+            system_prompt = await self._build_system_prompt(message)
             
             # Use agent_task (enriched with conversation history + memory)
             # NOT raw message — otherwise agent loses multi-turn context
@@ -933,15 +945,17 @@ class ConversationManager:
                 pii_map=pii_map,
                 model_tier=model_tier
             )
+            # Learn from action conversations (preferences, calibration, etc.)
+            await self._learn_from_conversation(message, response)
             return response
 
         elif action == "question":
             # Question — use chat with Brain context
             logger.info("Question - using chat with Brain context")
             self._last_model_used = "claude-sonnet-4-5"
-            
-            # Simple conversation
-            system_prompt = await self._build_system_prompt(intent)
+
+            # Build system prompt with message string (not intent dict)
+            system_prompt = await self._build_system_prompt(message)
             
             # Use agent_task (enriched with history) so agent has multi-turn context
             response = await self.agent.run(
@@ -950,6 +964,8 @@ class ConversationManager:
                 system_prompt=system_prompt,
                 pii_map=pii_map
             )
+            # Learn from question conversations (preferences, calibration, etc.)
+            await self._learn_from_conversation(message, response)
             return response
 
         elif action == "clarify":
@@ -975,7 +991,7 @@ class ConversationManager:
                 logger.info("Trivial greeting - using chat (no tools needed)")
                 self._last_model_used = "claude-sonnet-4-5"
                 response = await self._chat(message)
-                self._last_bot_response = response
+                self._last_bot_responses[self._current_user_id or "unknown"] = response
                 await self._learn_from_conversation(message, response)
                 return response
 
@@ -995,40 +1011,11 @@ class ConversationManager:
             logger.info("Unknown intent - defaulting to chat")
             self._last_model_used = "claude-sonnet-4-5"
             response = await self._chat(message)
-            self._last_bot_response = response  # keep full response for next intent parse
+            self._last_bot_responses[self._current_user_id or "unknown"] = response
             return response
 
-    def _get_tool_context_for_intent(self) -> Dict[str, Any]:
-        """Dynamically extract tool context to avoid hardcoding intents.
-        
-        Returns:
-            Dict with tool names, descriptions, and derived keywords.
-        """
-        tool_names = []
-        tool_descriptions = []
-        action_keywords = set()
-
-        if hasattr(self.agent, 'tools'):
-            try:
-                definitions = self.agent.tools.get_tool_definitions()
-                for tool in definitions:
-                    name = tool.get('name', '')
-                    desc = tool.get('description', '')
-                    tool_names.append(name)
-                    tool_descriptions.append(f"- {name}: {desc}")
-                    
-                    # Add tool name parts to keywords
-                    for part in name.split('_'):
-                        if len(part) > 2:
-                            action_keywords.add(part)
-            except Exception as e:
-                logger.debug(f"Error getting tool definitions: {e}")
-
-        return {
-            "names": tool_names,
-            "descriptions": "\n".join(tool_descriptions),
-            "keywords": list(action_keywords)
-        }
+    # NOTE: _get_tool_context_for_intent() is defined once below (around line 1369).
+    # A duplicate definition that was here has been removed.
 
     async def _execute_with_fallback_model(
         self,
@@ -1412,11 +1399,15 @@ User says "good morning" → none"""
             Intent dict
         """
         # Gather recent conversation history for context-aware classification
-        # Also include the full last bot response so the LLM understands "yes"/"do it"
-        # even when the bot's message was too long to fit in the truncated history.
+        # Also include the full last bot response (per-user) so the LLM understands
+        # "yes"/"do it" even when the bot's message was truncated in history.
         conversation_history = await self._get_recent_history_for_intent()
-        if self._last_bot_response and self._last_bot_response not in conversation_history:
-            conversation_history = f"LAST BOT MESSAGE (full):\n{self._last_bot_response}\n\n{conversation_history}".strip()
+        _uid = self._current_user_id or "unknown"
+        _last_resp = self._last_bot_responses.get(_uid)
+        if _last_resp and _last_resp not in conversation_history:
+            # Cap injected response to prevent unbounded token use
+            _capped = _last_resp[:1500] + ("..." if len(_last_resp) > 1500 else "")
+            conversation_history = f"LAST BOT MESSAGE (full):\n{_capped}\n\n{conversation_history}".strip()
 
         # PRIMARY: Claude Haiku (fast, cheap, accurate, context-aware)
         try:
@@ -1442,23 +1433,7 @@ User says "good morning" → none"""
         except Exception as e:
             logger.warning(f"Haiku intent failed, using keyword fallback: {e}")
 
-        # DistilBERT classification
-        if self.intent_classifier:
-            try:
-                result = self.intent_classifier(message)[0]
-                label = result['label'].lower()  # e.g., 'positive' - map to your intents
-                score = result['score']
-                # Placeholder mapping - adjust based on fine-tuned labels
-                intent_map = {
-                    'positive': 'action',  # Example mapping
-                    'negative': 'conversation'
-                }
-                action = intent_map.get(label, 'unknown')
-                return {"action": action, "confidence": score, "parameters": {}, "_conversation_history": conversation_history}
-            except Exception as e:
-                logger.warning(f"DistilBERT classification failed: {e}, falling back to keywords")
-
-        # FALLBACK: Keyword matching (when API is down/rate-limited)
+        # FALLBACK: Keyword matching (when Haiku API is down/rate-limited)
         result = await self._parse_intent_locally(message)
         logger.info(f"Keyword intent: {result['action']} (confidence: {result['confidence']})")
         result["_conversation_history"] = conversation_history
@@ -2055,22 +2030,9 @@ Additional Examples for Background:
             except Exception as e:
                 logger.debug(f"Contact pre-resolution skipped: {e}")
 
-        # Enrich with relevant memory (contacts, preferences, past context)
-        if self.brain and hasattr(self.brain, 'get_relevant_context'):
-            try:
-                query = inferred_task or message
-                channel = getattr(self, '_current_channel', None)
-                try:
-                    mem_context = await self.brain.get_relevant_context(
-                        query, max_results=2, channel=channel
-                    )
-                except TypeError:
-                    mem_context = await self.brain.get_relevant_context(query, max_results=2)
-
-                if mem_context:
-                    task += f"\n\nRELEVANT MEMORY:\n{mem_context}"
-            except Exception as e:
-                logger.debug(f"Memory enrichment skipped (non-critical): {e}")
+        # NOTE: Brain memory context is injected via _build_system_prompt() — NOT here.
+        # Previously this method also called get_relevant_context(), causing duplicate
+        # context injection (~3000 extra tokens per agent call). Removed to fix.
 
         return task
 

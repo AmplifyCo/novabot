@@ -20,21 +20,21 @@ class RiskLevel(Enum):
     IRREVERSIBLE = "irreversible"  # Cannot be undone — needs approval
 
 
-# Tool risk classification
+# Tool risk classification — keys must match registered tool names
 TOOL_RISK_MAP: Dict[str, Dict[str, RiskLevel]] = {
     "bash": {
         "_default": RiskLevel.WRITE,
     },
-    "file_write": {
+    "file_operations": {
         "_default": RiskLevel.WRITE,
-    },
-    "file_read": {
-        "_default": RiskLevel.READ,
     },
     "web_search": {
         "_default": RiskLevel.READ,
     },
-    "web_browse": {
+    "web_fetch": {
+        "_default": RiskLevel.READ,
+    },
+    "browser": {
         "_default": RiskLevel.READ,
     },
     "email": {
@@ -51,7 +51,7 @@ TOOL_RISK_MAP: Dict[str, Dict[str, RiskLevel]] = {
         "delete_event": RiskLevel.IRREVERSIBLE,
         "_default": RiskLevel.WRITE,
     },
-    "x_post": {
+    "x_tool": {
         "post_tweet": RiskLevel.IRREVERSIBLE,
         "post_to_community": RiskLevel.IRREVERSIBLE,
         "delete_tweet": RiskLevel.IRREVERSIBLE,
@@ -62,6 +62,24 @@ TOOL_RISK_MAP: Dict[str, Dict[str, RiskLevel]] = {
         "list_reminders": RiskLevel.READ,
         "cancel_reminder": RiskLevel.WRITE,
         "_default": RiskLevel.WRITE,
+    },
+    "nova_task": {
+        "_default": RiskLevel.WRITE,
+    },
+    "contacts": {
+        "_default": RiskLevel.READ,
+    },
+    "linkedin": {
+        "_default": RiskLevel.WRITE,
+    },
+    "send_whatsapp_message": {
+        "_default": RiskLevel.IRREVERSIBLE,
+    },
+    "make_phone_call": {
+        "_default": RiskLevel.IRREVERSIBLE,
+    },
+    "clock": {
+        "_default": RiskLevel.READ,
     },
 }
 

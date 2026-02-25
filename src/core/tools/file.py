@@ -215,6 +215,29 @@ class FileTool(BaseTool):
                 error=f"Error reading file: {str(e)}"
             )
 
+    # Allowed write directories — writes outside these are blocked
+    _ALLOWED_WRITE_ROOTS = None  # Computed lazily
+
+    def _is_write_allowed(self, path: str) -> bool:
+        """Check if writing to this path is allowed (directory confinement).
+
+        Writes are restricted to the project directory and /tmp.
+        Prevents writing to system paths like /etc, ~/.bashrc, etc.
+        """
+        if self._ALLOWED_WRITE_ROOTS is None:
+            project_root = str(Path(__file__).resolve().parent.parent.parent.parent)
+            FileTool._ALLOWED_WRITE_ROOTS = [
+                project_root,
+                "/tmp",
+                os.path.expanduser("~/project-nova"),  # deployment path
+            ]
+
+        try:
+            resolved = str(Path(path).resolve())
+            return any(resolved.startswith(root) for root in self._ALLOWED_WRITE_ROOTS)
+        except Exception:
+            return False
+
     async def _write_file(self, path: str, content: str) -> ToolResult:
         """Write content to file (creates or overwrites).
 
@@ -226,6 +249,14 @@ class FileTool(BaseTool):
             ToolResult with write status
         """
         try:
+            # Directory confinement — only allow writes within project directory
+            if not self._is_write_allowed(path):
+                logger.warning(f"Write blocked — outside project directory: {path}")
+                return ToolResult(
+                    success=False,
+                    error="Cannot write outside the project directory"
+                )
+
             # Create parent directory if needed
             parent_dir = Path(path).parent
             if not parent_dir.exists():

@@ -10,6 +10,7 @@ Security: read/write is local file only. No external calls. No PII stored here
 
 import json
 import logging
+import tempfile
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -55,7 +56,15 @@ class WorkingMemory:
 
     def _save(self):
         self._path.parent.mkdir(parents=True, exist_ok=True)
-        self._path.write_text(json.dumps(self._state, indent=2, default=str))
+        data = json.dumps(self._state, indent=2, default=str)
+        fd, tmp = tempfile.mkstemp(dir=self._path.parent, suffix=".tmp")
+        try:
+            with open(fd, "w") as f:
+                f.write(data)
+            Path(tmp).rename(self._path)
+        except BaseException:
+            Path(tmp).unlink(missing_ok=True)
+            raise
 
     # ── Update after each conversation turn ──────────────────────────
 

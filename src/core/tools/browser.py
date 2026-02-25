@@ -9,6 +9,7 @@ import asyncio
 import base64
 import logging
 import os
+import shlex
 import subprocess
 from typing import Optional
 from .base import BaseTool
@@ -149,8 +150,9 @@ class BrowserTool(BaseTool):
             ToolResult with text content
         """
         try:
+            safe_url = shlex.quote(url)
             process = await asyncio.create_subprocess_shell(
-                f"w3m -dump '{url}'",
+                f"w3m -dump {safe_url}",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
@@ -192,8 +194,9 @@ class BrowserTool(BaseTool):
             ToolResult with raw content
         """
         try:
+            safe_url = shlex.quote(url)
             process = await asyncio.create_subprocess_shell(
-                f"curl -L -s '{url}'",
+                f"curl -L -s {safe_url}",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )

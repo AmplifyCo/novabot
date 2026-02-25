@@ -683,6 +683,13 @@ class TaskRunner:
             await self.telegram.notify(msg, level="warning")
             # Brief pause to give user a chance to react
             await asyncio.sleep(10)
+            # Re-check whether the task was cancelled during the wait
+            fresh = self.task_queue.get_task(task.id)
+            if fresh and fresh.status == "failed":
+                logger.info(f"Task {task.id}: cancelled during irreversible gate wait at step {step}")
+                raise asyncio.CancelledError(f"Task cancelled before irreversible step {step}")
+        except asyncio.CancelledError:
+            raise  # Don't swallow the cancellation
         except Exception as e:
             logger.warning(f"Irreversibility gate notification failed: {e}")
 

@@ -15,6 +15,8 @@ Security:
 import asyncio
 import json
 import logging
+import re
+import tempfile
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
@@ -25,6 +27,9 @@ logger = logging.getLogger(__name__)
 
 CHECK_INTERVAL = 6 * 3600   # 6 hours
 MAX_ITEMS      = 3          # Max observations per cycle
+MAX_OBS_LEN    = 280        # Max characters per observation sent to Telegram
+_MD_LINK_RE    = re.compile(r'\[([^\]]*)\]\([^)]+\)')  # [text](url) → text
+_RAW_URL_RE    = re.compile(r'https?://\S+')
 
 
 class AttentionEngine:
@@ -141,10 +146,60 @@ class AttentionEngine:
             # Strip markdown fences if present
             text = text.replace("```json", "").replace("```", "").strip()
             result = json.loads(text)
-            return result if isinstance(result, list) else []
+            if not isinstance(result, list):
+                return []
+            # Sanitize each observation before returning
+            prompt_names = self._extract_prompt_names(prompt)
+            sanitized = []
+            for obs in result:
+                if not isinstance(obs, str) or not obs.strip():
+                    continue
+                sanitized.append(self._sanitize_observation(obs, prompt_names))
+            return sanitized
         except Exception as e:
             logger.debug(f"Attention LLM failed: {e}")
             return []
+
+    @staticmethod
+    def _extract_prompt_names(prompt: str) -> set:
+        """Extract capitalized names present in the prompt for hallucination check."""
+        # Grab capitalized words (2+ chars) that look like proper names
+        words = set(re.findall(r'\b[A-Z][a-z]{1,}\b', prompt))
+        # Exclude common English words that happen to be capitalized
+        stop = {"Monday", "Tuesday", "Wednesday", "Thursday", "Friday",
+                "Saturday", "Sunday", "January", "February", "March",
+                "April", "May", "June", "July", "August", "September",
+                "October", "November", "December", "Today", "Memory",
+                "Reply", "JSON", "Be", "What", "Time", "Good", "One",
+                "People", "Anything", "Scan", "Items", "If", "No"}
+        return words - stop
+
+    @staticmethod
+    def _sanitize_observation(obs: str, prompt_names: set) -> str:
+        """Sanitize a single LLM observation before sending to Telegram.
+
+        - Strip markdown links [text](url) → text
+        - Remove raw URLs
+        - Cap length
+        - Warn if observation mentions names not present in prompt
+        """
+        # Strip markdown links, keep anchor text
+        clean = _MD_LINK_RE.sub(r'\1', obs)
+        # Remove raw URLs
+        clean = _RAW_URL_RE.sub('', clean).strip()
+        # Cap length
+        if len(clean) > MAX_OBS_LEN:
+            clean = clean[:MAX_OBS_LEN - 1] + "\u2026"
+        # Check for hallucinated names
+        obs_names = set(re.findall(r'\b[A-Z][a-z]{1,}\b', clean))
+        unknown = obs_names - prompt_names - {
+            "Monday", "Tuesday", "Wednesday", "Thursday", "Friday",
+            "Saturday", "Sunday", "January", "February", "March",
+            "April", "May", "June", "July", "August", "September",
+            "October", "November", "December", "Today", "Nova"}
+        if unknown:
+            logger.warning(f"Attention observation contains names not in prompt: {unknown}")
+        return clean
 
     async def _notify_with_header(self, observations: list, header: str):
         """Send observations via Telegram with the purpose-appropriate header."""
@@ -173,7 +228,15 @@ class AttentionEngine:
 
     def _save_log(self, log: dict):
         self._log_path.parent.mkdir(parents=True, exist_ok=True)
-        self._log_path.write_text(json.dumps(log, indent=2))
+        data = json.dumps(log, indent=2)
+        fd, tmp = tempfile.mkstemp(dir=self._log_path.parent, suffix=".tmp")
+        try:
+            with open(fd, "w") as f:
+                f.write(data)
+            Path(tmp).rename(self._log_path)
+        except BaseException:
+            Path(tmp).unlink(missing_ok=True)
+            raise
 
     def _already_sent(self, observation: str) -> bool:
         """Return True if this observation was sent in the last 24 hours."""

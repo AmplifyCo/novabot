@@ -229,7 +229,8 @@ class BashTool(BaseTool):
     def _has_command_injection(self, command: str) -> bool:
         """Detect command injection bypass attempts.
 
-        Catches: bash -c "dangerous", eval "dangerous", $(dangerous), etc.
+        Catches: bash -c "dangerous", eval "dangerous", $(dangerous),
+        base64 decoding, hex encoding, variable expansion, pipe-to-shell, etc.
         """
         dangerous_patterns = [
             r'bash\s+-c\s+["\'].*rm.*-rf',  # bash -c "rm -rf"
@@ -239,6 +240,23 @@ class BashTool(BaseTool):
             r'`.*rm.*-rf',                   # `rm -rf ...`
             r'bash\s+-c\s+["\'].*shutdown',  # bash -c "shutdown"
             r'bash\s+-c\s+["\'].*reboot',    # bash -c "reboot"
+            # Encoding bypass patterns
+            r'base64\s+(-d|--decode)',        # base64 -d (decode & pipe to shell)
+            r'\\x[0-9a-fA-F]{2}',            # hex escape sequences
+            r'printf\s+.*\\x',               # printf with hex escapes
+            r'\$\{?\w+\}?\s+\$\{?\w+',       # variable expansion: $a $b
+            # Pipe-to-shell patterns
+            r'\|\s*(ba)?sh\b',                # pipe to sh/bash
+            r'\|\s*source\b',                 # pipe to source
+            r'curl\s+.*\|\s*(ba)?sh',         # curl | sh
+            r'wget\s+.*\|\s*(ba)?sh',         # wget | sh
+            # Subprocess launchers
+            r'python[23]?\s+-c\s+.*(?:os\.|subprocess|system)', # python -c "os.system()"
+            r'perl\s+-e\s+.*(?:system|exec)',  # perl -e "system()"
+            r'ruby\s+-e\s+.*(?:system|exec)',  # ruby -e "system()"
+            # Reverse shells
+            r'/dev/tcp/',                      # bash reverse shell
+            r'mkfifo',                         # named pipe for reverse shell
         ]
 
         for pattern in dangerous_patterns:

@@ -122,8 +122,8 @@ class ToolRegistry:
         """Get tool definitions scoped to the allowed set (just-in-time tool access).
 
         If allowed_tools is None or empty, returns all definitions (backwards-compat).
-        Unknown tool names are silently skipped. Always includes file_operations
-        and bash so the agent can write its output file even in scoped mode.
+        Unknown tool names are silently skipped. Only includes the tools specified
+        in tool_hints — no longer auto-includes bash/file_operations for containment.
 
         Args:
             allowed_tools: List of tool names to expose (from subtask.tool_hints)
@@ -134,9 +134,8 @@ class ToolRegistry:
         if not allowed_tools:
             return self.get_tool_definitions()
 
-        # Normalize: include canonical always-available tools
-        always_include = {"bash", "file_operations", "file"}
-        scope = set(allowed_tools) | always_include
+        # Only expose the tools explicitly requested — no blanket bash/file access
+        scope = set(allowed_tools)
 
         scoped = [
             tool.to_anthropic_tool()

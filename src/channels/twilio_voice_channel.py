@@ -174,6 +174,31 @@ class TwilioVoiceChannel:
 
     # ── Webhook Handlers ─────────────────────────────────────────────────
 
+    def _is_caller_allowed(self, form_data: Dict[str, str]) -> bool:
+        """Check if the caller is in the allowed_numbers list.
+
+        Returns True if:
+        - allowed_numbers is configured AND caller matches, OR
+        - This is an outbound call (we initiated it), OR
+        - The call has an active mission (outbound agent call)
+        """
+        if not self.allowed_numbers:
+            # No allow-list configured — reject all inbound (fail-closed)
+            return False
+
+        direction = form_data.get("Direction", "")
+        if "outbound" in direction.lower():
+            return True  # We initiated this call
+
+        call_sid = form_data.get("CallSid", "")
+        if call_sid in self._call_missions:
+            return True  # Active mission call
+
+        raw_from = form_data.get("From", "")
+        clean_from = raw_from.replace("whatsapp:", "")
+        clean_allowed = [n.replace("whatsapp:", "") for n in self.allowed_numbers]
+        return clean_from in clean_allowed
+
     async def handle_incoming_call(self, form_data: Dict[str, str]) -> str:
         """Handle initial incoming call webhook (/twilio/voice).
 
@@ -186,6 +211,16 @@ class TwilioVoiceChannel:
             say.text = "System is currently offline. Please try again later."
             SubElement(response, 'Hangup')
             return f"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n{tostring(response, encoding='utf-8').decode('utf-8')}"
+
+        # Caller authorization — reject unknown callers (denial-of-wallet protection)
+        if not self._is_caller_allowed(form_data):
+            caller = form_data.get("From", "unknown")
+            logger.warning(f"Rejected unauthorized voice call from {caller}")
+            response = Element('Response')
+            say = SubElement(response, 'Say')
+            say.text = "Sorry, this number is not authorized. Goodbye."
+            SubElement(response, 'Hangup')
+            return tostring(response, encoding="unicode")
 
         user_number = self._get_user_number(form_data)
         call_sid = form_data.get("CallSid", "Unknown")

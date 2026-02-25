@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import os
 import re
 import subprocess
 from datetime import datetime
@@ -165,10 +166,34 @@ class AutoFixer:
             )
 
         module_name = match.group(1)
+
+        # Security: only allow installing packages from requirements.txt
+        # Prevents log-poisoning attacks where a crafted error triggers
+        # pip install of a malicious package
+        _allowed_packages = set()
+        try:
+            req_path = os.path.join(os.path.dirname(__file__), "..", "..", "..", "requirements.txt")
+            with open(os.path.normpath(req_path)) as f:
+                for line in f:
+                    pkg = line.strip().split("==")[0].split(">=")[0].split("[")[0].strip()
+                    if pkg and not pkg.startswith("#"):
+                        _allowed_packages.add(pkg.lower())
+        except FileNotFoundError:
+            pass
+
+        if module_name.lower() not in _allowed_packages:
+            logger.warning(f"Blocked auto-install of unknown package: {module_name}")
+            return FixResult(
+                success=False,
+                error_type=ErrorType.IMPORT_ERROR,
+                action_taken=f"Package '{module_name}' not in requirements.txt — blocked for safety",
+                details="Only packages listed in requirements.txt can be auto-installed"
+            )
+
         logger.info(f"Attempting to install: {module_name}")
 
         try:
-            # Try to install the package
+            # Try to install the package (validated against requirements.txt)
             result = subprocess.run(
                 ["pip", "install", module_name],
                 capture_output=True,
@@ -394,10 +419,9 @@ class AutoFixer:
         # Check if it's a connection/network issue
         if any(keyword in error.message.lower() for keyword in ["connection", "network", "timeout", "503", "500"]):
             try:
-                # Wait a bit before suggesting retry
-                import time
+                # Wait a bit before suggesting retry (async to avoid blocking event loop)
                 wait_seconds = 5
-                time.sleep(wait_seconds)
+                await asyncio.sleep(wait_seconds)
 
                 return FixResult(
                     success=True,

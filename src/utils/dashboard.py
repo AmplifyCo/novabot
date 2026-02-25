@@ -3,6 +3,7 @@
 import asyncio
 import hashlib
 import hmac
+import html
 import json
 import logging
 import os
@@ -14,7 +15,7 @@ from typing import Dict, Any, List, Optional
 logger = logging.getLogger(__name__)
 
 # HTTP paths exempt from auth (webhooks must be reachable without login)
-_EXEMPT_PATHS = {"/health", "/login", "/logout", "/telegram/webhook", "/linkedin/callback", "/nova/chat"}
+_EXEMPT_PATHS = {"/health", "/login", "/logout", "/telegram/webhook", "/linkedin/auth", "/linkedin/callback", "/nova/chat"}
 _EXEMPT_PREFIXES = ("/twilio/", "/audio/", "/ws/")
 
 
@@ -39,6 +40,9 @@ class Dashboard:
         self._sessions: Dict[str, datetime] = {}   # token → expiry (24h TTL)
         self._dashboard_username = os.getenv("DASHBOARD_USERNAME", "nova")
         self._dashboard_password = os.getenv("DASHBOARD_PASSWORD", "")
+
+        # ── LinkedIn OAuth CSRF state tokens ──────────────────────────
+        self._oauth_states: Dict[str, datetime] = {}   # state → expiry (10min TTL)
 
         # ── Wired components ───────────────────────────────────────────
         self._conversation_manager = None
@@ -95,8 +99,8 @@ class Dashboard:
         """Validate Twilio webhook signature (HMAC-SHA1)."""
         auth_token = getattr(self, '_twilio_auth_token', '')
         if not auth_token:
-            logger.warning("Twilio auth token not set — skipping signature validation (dev mode)")
-            return True
+            logger.warning("Twilio auth token not set — rejecting webhook (configure token first)")
+            return False
         if not signature:
             logger.warning(f"Missing X-Twilio-Signature on request to {request_url}")
             return False
@@ -112,7 +116,8 @@ class Dashboard:
         """Validate Telegram webhook secret token (constant-time comparison)."""
         expected = getattr(self, '_telegram_secret', '')
         if not expected:
-            return True  # Dev mode — not configured
+            logger.warning("Telegram webhook secret not set — rejecting webhook (configure secret first)")
+            return False
         if not header_token:
             return False
         return hmac.compare_digest(expected, header_token)
@@ -437,7 +442,8 @@ class Dashboard:
                 return self.JSONResponse({"error": "API key not configured"}, status_code=503)
 
             auth = request.headers.get("Authorization", "")
-            if not auth.startswith("Bearer ") or auth[len("Bearer "):] != api_key:
+            token = auth[len("Bearer "):] if auth.startswith("Bearer ") else ""
+            if not token or not hmac.compare_digest(token, api_key):
                 logger.warning(f"Unauthorized /nova/chat attempt from {request.client.host if request.client else 'unknown'}")
                 return self.JSONResponse({"error": "Unauthorized"}, status_code=401)
 
@@ -528,6 +534,33 @@ class Dashboard:
             twiml = await self.twilio_voice_chat.handle_gather(form_data)
             return FR(content=twiml, media_type="text/xml")
 
+        # ── LinkedIn OAuth initiation ─────────────────────────────────
+        @app.get("/linkedin/auth")
+        async def linkedin_oauth_start(request: Request):
+            """Redirect to LinkedIn OAuth with a CSRF state token."""
+            import os as _os
+            from fastapi.responses import HTMLResponse as _HTML, RedirectResponse
+
+            client_id = _os.getenv("LINKEDIN_CLIENT_ID", "")
+            base_url = getattr(self, "_base_url", "").rstrip("/")
+            redirect_uri = f"{base_url}/linkedin/callback"
+            if not client_id:
+                return _HTML("<h2>Setup incomplete</h2><p>Set LINKEDIN_CLIENT_ID first.</p>")
+            # Generate CSRF state and store with 10-min expiry
+            state = secrets.token_urlsafe(32)
+            self._oauth_states[state] = datetime.now() + timedelta(minutes=10)
+            # Prune expired states
+            now = datetime.now()
+            self._oauth_states = {k: v for k, v in self._oauth_states.items() if v > now}
+            auth_url = (
+                "https://www.linkedin.com/oauth/v2/authorization"
+                f"?response_type=code&client_id={client_id}"
+                f"&redirect_uri={redirect_uri}"
+                f"&state={state}"
+                "&scope=openid%20profile%20w_member_social"
+            )
+            return RedirectResponse(auth_url)
+
         # ── LinkedIn OAuth callback ────────────────────────────────────
         @app.get("/linkedin/callback")
         async def linkedin_oauth_callback(request: Request):
@@ -543,7 +576,17 @@ class Dashboard:
             )
 
             if error:
-                return _HTML(f"<h2>LinkedIn auth failed</h2><p>{error}</p>")
+                return _HTML(f"<h2>LinkedIn auth failed</h2><p>{html.escape(error)}</p>")
+
+            # ── CSRF state validation ──
+            state = request.query_params.get("state", "")
+            now = datetime.now()
+            expected_expiry = self._oauth_states.pop(state, None) if state else None
+            if not expected_expiry or expected_expiry < now:
+                logger.warning("LinkedIn OAuth callback: invalid or expired state parameter")
+                return _HTML("<h2>Invalid or expired OAuth state</h2>"
+                             "<p>Please restart the LinkedIn authorization flow.</p>")
+
             if not code:
                 return _HTML("<h2>No authorization code in callback.</h2>")
 
@@ -576,7 +619,7 @@ class Dashboard:
 
                 access_token = token_data.get("access_token", "")
                 if not access_token:
-                    return _HTML(f"<h2>Token exchange failed</h2><pre>{token_data}</pre>")
+                    return _HTML(f"<h2>Token exchange failed</h2><pre>{html.escape(str(token_data))}</pre>")
 
                 expires_days = token_data.get("expires_in", 0) // 86400
                 env_path = _Path(__file__).parent.parent.parent / ".env"
@@ -649,7 +692,7 @@ sudo systemctl restart digital-twin</pre>
 
             except Exception as e:
                 logger.error(f"LinkedIn OAuth callback error: {e}", exc_info=True)
-                return _HTML(f"<h2>Error during LinkedIn authorization</h2><p>{e}</p>")
+                return _HTML(f"<h2>Error during LinkedIn authorization</h2><p>{html.escape(str(e))}</p>")
 
         # ── Run server ────────────────────────────────────────────────
         config = self.uvicorn.Config(

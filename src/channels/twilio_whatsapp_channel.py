@@ -48,10 +48,15 @@ class TwilioWhatsAppChannel:
             logger.info("Twilio WhatsApp channel disabled (missing credentials)")
 
     def _is_allowed(self, phone_number: str) -> bool:
-        """Check if number is allowed to interact with the bot."""
+        """Check if number is allowed to interact with the bot.
+
+        Fail-closed: if no allowed_numbers configured, reject everyone
+        (prevents accidental open access when .env is incomplete).
+        """
         if not self.allowed_numbers:
-            return True
-        
+            logger.warning(f"WhatsApp rejected {phone_number}: WHATSAPP_ALLOWED_NUMBERS not configured (fail-closed)")
+            return False
+
         # Strip 'whatsapp:' for checking against allowed list
         clean_number = phone_number.replace('whatsapp:', '')
         clean_allowed = [num.replace('whatsapp:', '') for num in self.allowed_numbers]
