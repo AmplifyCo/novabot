@@ -221,7 +221,7 @@ class ConversationManager:
                             turn = json.loads(line)
                             uid = turn.get("user_id", "default")
                             if uid not in self._conversation_buffers:
-                                self._conversation_buffers[uid] = deque(maxlen=10)
+                                self._conversation_buffers[uid] = deque(maxlen=15)
                             self._conversation_buffers[uid].append(turn)
                             count += 1
                         except json.JSONDecodeError:
@@ -494,7 +494,7 @@ class ConversationManager:
 
             # Save to in-memory buffer + daily log (for post-call report)
             if user_id not in self._conversation_buffers:
-                self._conversation_buffers[user_id] = deque(maxlen=10)
+                self._conversation_buffers[user_id] = deque(maxlen=15)
 
             turn = {
                 "user_message": message[:500],
@@ -640,7 +640,7 @@ class ConversationManager:
             # In-memory buffer: per-user, instant, reliable short-term context
             buffer_key = user_id or channel or "default"
             if buffer_key not in self._conversation_buffers:
-                self._conversation_buffers[buffer_key] = deque(maxlen=10)
+                self._conversation_buffers[buffer_key] = deque(maxlen=15)
 
             turn = {
                 "user_message": message,
@@ -1462,7 +1462,7 @@ User says "good morning" → none"""
 
         if user_buffer:
             history_lines = []
-            recent_turns = list(user_buffer)[-7:]
+            recent_turns = list(user_buffer)[-15:]
             for turn in recent_turns:
                 user_msg = turn.get("user_message", "")
                 bot_msg = turn.get("assistant_response", "")
@@ -1480,9 +1480,9 @@ User says "good morning" → none"""
         try:
             channel = getattr(self, '_current_channel', None)
             try:
-                recent = await self.brain.get_recent_conversation(limit=7, channel=channel)
+                recent = await self.brain.get_recent_conversation(limit=15, channel=channel)
             except TypeError:
-                recent = await self.brain.get_recent_conversation(limit=7)
+                recent = await self.brain.get_recent_conversation(limit=15)
 
             if not recent:
                 return ""
