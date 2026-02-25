@@ -76,7 +76,8 @@ class AutonomousAgent:
         max_iterations: Optional[int] = None,
         system_prompt: Optional[str] = None,
         pii_map: Optional[Dict[str, str]] = None,
-        model_tier: str = "sonnet"
+        model_tier: str = "sonnet",
+        allowed_tools: Optional[List[str]] = None,
     ) -> str:
         """Execute task autonomously until completion.
 
@@ -89,6 +90,9 @@ class AutonomousAgent:
                 - "flash": Gemini Flash (simple tools — reminders, contacts, clock)
                 - "sonnet": Claude Sonnet (default — complex tasks, questions)
                 - "quality": Claude Sonnet with retry, fallback to Gemini Pro (email compose)
+            allowed_tools: Optional list of tool names to scope this run to.
+                           None = all tools available. Used by TaskRunner for
+                           just-in-time tool access per subtask.
 
         Returns:
             Final result as string
@@ -140,10 +144,12 @@ class AutonomousAgent:
                     return "Task cancelled."
 
                 # Call LLM — all calls go through LiteLLM
+                # Use scoped tool definitions if allowed_tools was specified (#1)
                 self.state_machine.transition(AgentState.THINKING)
+                tool_defs = self.tools.get_scoped_definitions(allowed_tools)
                 response = await self._call_llm(
                     messages=messages,
-                    tools=self.tools.get_tool_definitions(),
+                    tools=tool_defs,
                     system_prompt=system_prompt,
                     max_tokens=4096,
                     model_tier=model_tier

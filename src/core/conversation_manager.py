@@ -1894,34 +1894,89 @@ Additional Examples for Background:
 
         return "low", []
 
+    def _compute_delegation_score(self, goal: str, intent: Dict[str, Any]) -> float:
+        """#4 Multi-dimensional pre-delegation score [0.0–1.0].
+
+        Combines four independent signals to catch tasks the LLM under-scores:
+
+        1. Tool variety   — more unique tools needed → higher complexity
+        2. Reversibility  — high-risk actions inflate the score
+        3. Complexity kw  — "research", "analyze", "compare", "investigate"
+        4. Scope/duration — "every", "all", "comprehensive", "detailed"
+
+        Threshold: score >= 0.50 → route to background.
+        """
+        score = 0.0
+        goal_lower = goal.lower()
+
+        # Dimension 1: tool variety (biggest single signal)
+        tool_hints = intent.get("tool_hints", [])
+        n = len(tool_hints)
+        if n >= 3:
+            score += 0.35
+        elif n == 2:
+            score += 0.20
+        # 0-1 tools → 0.0 (guarded below)
+
+        # Dimension 2: reversibility / risk
+        risk_level, _ = self._estimate_task_risk(goal, intent)
+        if risk_level == "high":
+            score += 0.20
+        elif risk_level == "medium":
+            score += 0.10
+
+        # Dimension 3: cognitive complexity keywords
+        complexity_kw = [
+            "research", "analyze", "analyse", "compare", "investigate",
+            "summarize", "report on", "find information", "look into",
+            "what are the", "tell me about", "explain",
+        ]
+        if any(kw in goal_lower for kw in complexity_kw):
+            score += 0.25
+
+        # Dimension 4: scope / duration signals
+        scope_kw = [
+            "every", "all the", "comprehensive", "detailed", "full list",
+            "compile", "multi", "multiple", "in-depth", "thorough",
+        ]
+        if any(kw in goal_lower for kw in scope_kw):
+            score += 0.20
+
+        return min(score, 1.0)
+
     def _is_background_task(self, message: str, intent: Dict[str, Any]) -> bool:
         """Return True if this task should be queued for background execution.
 
-        Routing decision is made by the intent classifier (LLM), which sets
-        needs_background=True when it judges the task requires 3+ tool calls
-        or multi-step research. No keyword heuristics needed here.
+        Decision combines the LLM's needs_background signal with a
+        multi-dimensional delegation score (#4). Both are checked so
+        edge cases the LLM misses are still caught, and cheap single-tool
+        tasks the LLM over-labels are always kept inline.
 
         Voice calls are never backgrounded regardless of intent.
-
-        Safeguard: single-tool tasks are always run inline regardless of the
-        LLM's needs_background flag. A task that only needs one tool cannot
-        genuinely require background processing.
         """
         if getattr(self, '_current_channel', '') == 'voice':
             return False
 
-        if not intent.get("needs_background", False):
-            return False
-
-        # Override: 0 or 1 tool hint → can run inline, no background needed
+        # Hard veto: 0-1 tools → can always run inline regardless of any signal
         tool_hints = intent.get("tool_hints", [])
         if len(tool_hints) <= 1:
             logger.debug(
-                f"needs_background overridden to False — only {len(tool_hints)} tool(s) needed"
+                f"needs_background=False — only {len(tool_hints)} tool(s) needed"
             )
             return False
 
-        return True
+        # #4: compute multi-dimensional score
+        score = self._compute_delegation_score(message, intent)
+        llm_flag = intent.get("needs_background", False)
+
+        # Route to background if: LLM says yes OR composite score >= threshold
+        if llm_flag or score >= 0.50:
+            logger.debug(
+                f"Background routing: llm_flag={llm_flag}, delegation_score={score:.2f}"
+            )
+            return True
+
+        return False
 
     async def _build_execution_plan(self, intent: Dict[str, Any], message: str) -> str:
         """Enrich intent with memory context to build a comprehensive agent task.

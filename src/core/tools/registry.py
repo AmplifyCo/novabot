@@ -118,6 +118,37 @@ class ToolRegistry:
         """
         return [tool.to_anthropic_tool() for tool in self.tools.values()]
 
+    def get_scoped_definitions(self, allowed_tools: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+        """Get tool definitions scoped to the allowed set (just-in-time tool access).
+
+        If allowed_tools is None or empty, returns all definitions (backwards-compat).
+        Unknown tool names are silently skipped. Always includes file_operations
+        and bash so the agent can write its output file even in scoped mode.
+
+        Args:
+            allowed_tools: List of tool names to expose (from subtask.tool_hints)
+
+        Returns:
+            Filtered list of tool definitions in Anthropic format
+        """
+        if not allowed_tools:
+            return self.get_tool_definitions()
+
+        # Normalize: include canonical always-available tools
+        always_include = {"bash", "file_operations", "file"}
+        scope = set(allowed_tools) | always_include
+
+        scoped = [
+            tool.to_anthropic_tool()
+            for name, tool in self.tools.items()
+            if name in scope
+        ]
+
+        # Log the scoping decision for audit visibility
+        exposed = [t["name"] for t in scoped] if scoped else []
+        logger.debug(f"Scoped tool access: {exposed}")
+        return scoped
+
     async def execute_tool(
         self,
         tool_name: str,

@@ -129,6 +129,13 @@ class TaskRunner:
                 logger.info(f"Task {task.id}: executing subtask {idx+1}/{num_subtasks}: {subtask.description[:60]}")
                 self.task_queue.update_subtask(task.id, idx, "running")
 
+                # #3: Continuous authorization — re-read task status before each subtask.
+                # If the user cancelled via 'stop task', status will be 'failed'. Stop immediately.
+                fresh = self.task_queue.get_task(task.id)
+                if fresh and fresh.status == "failed":
+                    logger.info(f"Task {task.id}: cancelled externally before subtask {idx+1}, stopping")
+                    raise asyncio.CancelledError("Task cancelled externally")
+
                 # Reversibility gate (#2): warn before irreversible subtasks
                 if not subtask.reversible:
                     await self._notify_irreversible_gate(task, idx + 1, num_subtasks, subtask.description)
@@ -259,10 +266,12 @@ class TaskRunner:
 
         for attempt in range(self.MAX_SUBTASK_RETRIES):
             try:
+                # #1: just-in-time tool access — scope tools to this subtask's hints
                 result = await self.agent.run(
                     task=task_prompt,
                     model_tier=model_tier,
                     max_iterations=8,  # generous for research tasks
+                    allowed_tools=subtask.tool_hints if subtask.tool_hints else None,
                 )
                 return result or "Step completed (no output)"
             except Exception as e:
