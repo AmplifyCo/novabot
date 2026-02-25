@@ -134,9 +134,25 @@ class DigitalCloneBrain:
     # JSONL BACKUP — reliable file-based memory backup
     # ================================================================
 
-    def _append_to_backup(self, record_type: str, data: Dict[str, Any]):
-        """Append a record to the JSONL backup file."""
+    _BACKUP_MAX_BYTES = 10 * 1024 * 1024  # 10 MB
+
+    def _rotate_backup_if_needed(self):
+        """Rotate backup file when it exceeds _BACKUP_MAX_BYTES.
+
+        Keeps only 1 rotated copy: brain_backup.jsonl -> brain_backup.jsonl.1
+        """
         try:
+            if self._backup_file.exists() and self._backup_file.stat().st_size > self._BACKUP_MAX_BYTES:
+                rotated = self._backup_file.with_suffix(".jsonl.1")
+                self._backup_file.replace(rotated)
+                logger.info(f"Rotated JSONL backup ({rotated})")
+        except Exception as e:
+            logger.warning(f"Failed to rotate JSONL backup: {e}")
+
+    def _append_to_backup(self, record_type: str, data: Dict[str, Any]):
+        """Append a record to the JSONL backup file. Rotates at 10 MB."""
+        try:
+            self._rotate_backup_if_needed()
             entry = {
                 "type": record_type,
                 "timestamp": datetime.now().isoformat(),
@@ -267,24 +283,34 @@ class DigitalCloneBrain:
     ):
         """Remember a user preference (shared across all talents).
 
+        Uses a deterministic doc_id derived from (category, preference) so that
+        duplicate preferences are upserted rather than creating unbounded growth.
+
         Args:
             category: Preference category (food, travel, etc.)
             preference: Preference description
             source: Origin — 'user_stated', 'llm_derived', or 'system'
             confidence: Confidence score 0.0-1.0 (user_stated should be 1.0)
         """
+        import hashlib
         text = f"Preference in {category}: {preference}"
+        # Deterministic ID: same category+preference → same doc_id → upsert
+        content_hash = hashlib.sha256(
+            f"{category.lower().strip()}:{preference.lower().strip()}".encode()
+        ).hexdigest()[:16]
+        doc_id = f"pref_{content_hash}"
+
         metadata = {
             "category": category,
             "source": source,
             "confidence": confidence,
             "timestamp": datetime.now().isoformat()
         }
-        await self.preferences.store(text=text, metadata=metadata)
+        await self.preferences.store(text=text, metadata=metadata, doc_id=doc_id)
 
         # JSONL backup
         self._append_to_backup("preference", {
-            "text": text, "metadata": metadata
+            "text": text, "metadata": metadata, "doc_id": doc_id
         })
         logger.info(f"Remembered preference: {category} - {preference} (source={source}, confidence={confidence})")
 
@@ -305,12 +331,15 @@ class DigitalCloneBrain:
             relationship: Relationship to user
             preferences: Dict of person's preferences
         """
-        contact_id = name.lower().replace(" ", "_")
+        contact_id = name.lower().replace(" ", "_").replace("'", "")
         text = f"{name}: {relationship}. Preferences: {json.dumps(preferences)}"
+        # Caller preferences go first; name/relationship override to prevent spoofing
+        _safe_prefs = {k: v for k, v in preferences.items()
+                       if k not in ("name", "relationship")}
         metadata = {
+            **_safe_prefs,
             "name": name,
             "relationship": relationship,
-            **preferences
         }
         doc_id = f"contact_{contact_id}"
 
@@ -351,15 +380,25 @@ class DigitalCloneBrain:
         is replaced with a redaction marker. Returns the filtered text and a
         flag indicating whether anything was removed.
 
+        If standard sentence splitting (on .!?\\n) produces only 1 segment and
+        the message is longer than 50 chars, falls back to splitting on commas,
+        semicolons, and ' and '. If even that yields only 1 segment, checks
+        keyword matches granularly against the whole chunk.
+
         Returns:
             (filtered_text, was_filtered)
         """
         import re
         sentences = re.split(r'(?<=[.!?\n])\s+', text)
-        filtered_sentences = []
-        was_filtered = False
+
+        # Fallback: if only 1 segment and text is long, try secondary delimiters
+        if len(sentences) == 1 and len(text) > 50:
+            sentences = re.split(r'\s*[;,]\s+|\s+and\s+', text)
 
         all_sensitive = cls._FINANCIAL_KEYWORDS | cls._HEALTH_KEYWORDS
+
+        filtered_sentences = []
+        was_filtered = False
 
         for sentence in sentences:
             lower = sentence.lower()
@@ -464,15 +503,19 @@ class DigitalCloneBrain:
         conversation_text = f"""User: {stored_message}
 Assistant ({model_used}): {assistant_response}"""
 
+        # Build metadata — caller fields go first, then safety-critical fields
+        # OVERRIDE last so they cannot be overwritten by caller-supplied metadata
+        _caller_meta = {k: v for k, v in (metadata or {}).items()
+                        if k not in ("type", "content_policy", "talent")}
         store_metadata = {
+            **_caller_meta,
             "type": "conversation",
             "model_used": model_used,
             "timestamp": datetime.now().isoformat(),
             "user_message": stored_message,
-            "assistant_response": assistant_response,
+            "assistant_response": assistant_response[:500],  # cap stored response size
             "content_policy": content_policy,
             "talent": talent or "unknown",
-            **metadata
         }
 
         if talent:
@@ -514,9 +557,14 @@ Assistant ({model_used}): {assistant_response}"""
         resolved_talent = self._resolve_talent(channel=channel, talent=talent)
         context_parts = []
 
+        # Distance threshold for relevance — discard results farther than this
+        _RELEVANCE_THRESHOLD = 1.0  # L2 distance; lower = stricter
+
         # --- COLLECTIVE: Identity & style (always included) ---
         try:
-            identity_results = await self.identity.search(task, n_results=3)
+            identity_results = await self.identity.search(
+                task, n_results=3, distance_threshold=_RELEVANCE_THRESHOLD
+            )
             if identity_results:
                 context_parts.append("## Identity & Style:")
                 for r in identity_results:
@@ -526,7 +574,9 @@ Assistant ({model_used}): {assistant_response}"""
 
         # --- COLLECTIVE: Preferences (always included) ---
         try:
-            prefs = await self.preferences.search(task, n_results=3)
+            prefs = await self.preferences.search(
+                task, n_results=3, distance_threshold=_RELEVANCE_THRESHOLD
+            )
             if prefs:
                 context_parts.append("\n## Preferences:")
                 for pref in prefs:
@@ -567,7 +617,11 @@ Assistant ({model_used}): {assistant_response}"""
         if resolved_talent:
             try:
                 ctx = self._get_context(resolved_talent)
-                memories = await ctx.search(task, n_results=max_results)
+                memories = await ctx.search(
+                    task, n_results=max_results,
+                    filter_metadata={"type": "conversation"},
+                    distance_threshold=_RELEVANCE_THRESHOLD
+                )
                 if memories:
                     context_parts.append(f"\n## {resolved_talent.title()} Context:")
                     for mem in memories:
@@ -577,7 +631,11 @@ Assistant ({model_used}): {assistant_response}"""
         else:
             # Fallback: search legacy unified memory
             try:
-                memories = await self.memory.search(task, n_results=max_results)
+                memories = await self.memory.search(
+                    task, n_results=max_results,
+                    filter_metadata={"type": "conversation"},
+                    distance_threshold=_RELEVANCE_THRESHOLD
+                )
                 if memories:
                     context_parts.append("\n## Relevant Memories:")
                     for mem in memories:
@@ -748,35 +806,112 @@ Assistant ({model_used}): {assistant_response}"""
     # EXPORT / IMPORT
     # ================================================================
 
-    async def export_for_migration(self, password: str, output_file: str = "digital_clone_brain.brain") -> str:
-        """Export entire brain for migration to new machine."""
+    @staticmethod
+    def _dump_table_records(vdb: 'VectorDatabase') -> List[Dict[str, Any]]:
+        """Extract all text+metadata records from a VectorDatabase table."""
+        try:
+            rows = vdb.table.to_list()
+        except Exception:
+            return []
+        records = []
+        for row in rows:
+            try:
+                meta = json.loads(row.get("metadata", "{}"))
+            except (json.JSONDecodeError, TypeError):
+                meta = {}
+            records.append({
+                "id": row.get("id"),
+                "text": row.get("text", ""),
+                "metadata": meta,
+            })
+        return records
+
+    @staticmethod
+    def _derive_fernet_key(password: str, salt: bytes) -> bytes:
+        """Derive a Fernet-compatible key from a password via PBKDF2."""
+        import base64
+        import hashlib
+        dk = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, iterations=480_000, dklen=32)
+        return base64.urlsafe_b64encode(dk)
+
+    async def export_for_migration(self, password: str, output_file: str = "digital_clone_brain.brain") -> Dict[str, str]:
+        """Export entire brain for migration to new machine.
+
+        Uses PBKDF2 to derive an encryption key from the given password.
+        Exports actual identity, preferences, and contacts data (not just counts).
+
+        Returns:
+            Dict with 'file' (output path) and 'note' (password reminder).
+        """
+        import os
+
         brain_data = {
             "collective": {
-                "identity_count": self.identity.count(),
-                "preferences_count": self.preferences.count(),
-                "contacts_count": self.contacts.count(),
+                "identity": self._dump_table_records(self.identity),
+                "preferences": self._dump_table_records(self.preferences),
+                "contacts": self._dump_table_records(self.contacts),
             },
             "contexts": {
                 name: ctx.count() for name, ctx in self._contexts.items()
             },
             "legacy_memory_count": self.memory.count(),
-            "exported_at": datetime.now().isoformat()
+            "exported_at": datetime.now().isoformat(),
         }
 
-        json_data = json.dumps(brain_data)
-        key = Fernet.generate_key()
+        json_data = json.dumps(brain_data, ensure_ascii=False)
+
+        salt = os.urandom(16)
+        key = self._derive_fernet_key(password, salt)
         cipher = Fernet(key)
         encrypted = cipher.encrypt(json_data.encode())
 
         with open(output_file, 'wb') as f:
-            f.write(encrypted)
+            f.write(salt + encrypted)  # prepend salt for import
 
         logger.info(f"Exported DigitalCloneBrain to {output_file}")
-        return output_file
+        return {
+            "file": output_file,
+            "note": "The same password is required to import this file on the new machine.",
+        }
 
     async def import_from_migration(self, brain_file: str, password: str):
-        """Import brain from migration file."""
+        """Import brain from migration file encrypted with the given password."""
         logger.info(f"Importing DigitalCloneBrain from {brain_file}")
+
+        with open(brain_file, 'rb') as f:
+            raw = f.read()
+
+        salt = raw[:16]
+        encrypted = raw[16:]
+        key = self._derive_fernet_key(password, salt)
+        cipher = Fernet(key)
+        json_data = cipher.decrypt(encrypted).decode()
+        brain_data = json.loads(json_data)
+
+        collective = brain_data.get("collective", {})
+        for record in collective.get("identity", []):
+            if record.get("text"):
+                await self.identity.store(
+                    text=record["text"],
+                    metadata=record.get("metadata", {}),
+                    doc_id=record.get("id"),
+                )
+        for record in collective.get("preferences", []):
+            if record.get("text"):
+                await self.preferences.store(
+                    text=record["text"],
+                    metadata=record.get("metadata", {}),
+                    doc_id=record.get("id"),
+                )
+        for record in collective.get("contacts", []):
+            if record.get("text"):
+                await self.contacts.store(
+                    text=record["text"],
+                    metadata=record.get("metadata", {}),
+                    doc_id=record.get("id"),
+                )
+
+        logger.info(f"Imported brain data from {brain_file}")
 
     # ================================================================
     # INTROSPECTION
