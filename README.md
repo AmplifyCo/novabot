@@ -1,3 +1,63 @@
+<div align="center">
+
+# Your Personal AI That Actually Gets Things Done
+
+**Nova handles your emails, calls, social posts, and research while you focus on building.**
+
+Self-hosted. Open source. Your data never leaves your server.
+
+[**Get Early Access →**](#placeholder-url) &nbsp;&nbsp; [**Watch a Demo →**](#placeholder-url)
+
+</div>
+
+---
+
+## What Nova Does For You
+
+**📬 Acts on your behalf**
+Sends emails, posts to X and LinkedIn, makes phone calls, books calendar events, and follows up with contacts. Nova takes action. You just ask.
+
+**🧠 Learns who you are**
+Your voice, contacts, preferences, and working style. The more you use it, the more Nova thinks and writes like you.
+
+**🔐 Stays on your server**
+Zero third-party data sharing. No monthly SaaS fee. You own the infrastructure, the data, and every line of code.
+
+---
+
+## How It Works
+
+1. **Set up in minutes.** Clone the repo, add your API keys, run one command.
+2. **Connect your tools.** Link email, calendar, Telegram, X, LinkedIn, and your phone number.
+3. **Just tell Nova what you need.** Message it on Telegram like a trusted assistant. It acts and reports back.
+
+---
+
+## Built for Solo Founders
+
+You are wearing every hat. Nova gives you leverage without adding headcount.
+
+- Drafts and sends cold emails while you sleep
+- Researches competitors and delivers a briefing before your first meeting
+- Posts to X and LinkedIn from a single message to Nova
+- Remembers every contact, follow-up, and unfinished thread so you never drop the ball
+
+---
+
+✅ **Open source (MIT)** &nbsp; ✅ **Self-hosted on your server** &nbsp; ✅ **No subscription fees** &nbsp; ✅ **Read every line of code**
+
+<div align="center">
+
+[**Get Early Access →**](#placeholder-url) &nbsp;&nbsp; [**Watch a Demo →**](#placeholder-url)
+
+</div>
+
+---
+
+> Want to self-host or contribute? Full technical documentation below.
+
+---
+
 # Nova 🦉 — the Auto Bot
 
 > A self-hosted personal AI agent that learns, remembers, and acts on your behalf.
