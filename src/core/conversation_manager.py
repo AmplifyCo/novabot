@@ -952,13 +952,27 @@ class ConversationManager:
             # Build context-aware system prompt (pass message string, not intent dict)
             system_prompt = await self._build_system_prompt(message)
 
+            # ── Restrictive tool scoping ──────────────────────────────────
+            # When intent classifier provides tool_hints, restrict the agent
+            # to ONLY those tools + safe read-only helpers. This prevents the
+            # agent from over-executing (e.g. posting to LinkedIn when asked
+            # about task status).
+            tool_hints = intent.get("tool_hints", [])
+            _SAFE_READONLY_TOOLS = {"file_operations", "web_search", "web_fetch", "clock", "reminder"}
+            if tool_hints:
+                allowed_tools = list(set(tool_hints) | _SAFE_READONLY_TOOLS)
+                logger.info(f"Tool scope restricted to: {allowed_tools}")
+            else:
+                allowed_tools = None  # no hints → all tools (backwards-compat)
+
             # Use agent_task (enriched with conversation history + memory)
             # NOT raw message — otherwise agent loses multi-turn context
             response = await self.agent.run(
                 task=agent_task,
                 system_prompt=system_prompt,
                 pii_map=pii_map,
-                model_tier=model_tier
+                model_tier=model_tier,
+                allowed_tools=allowed_tools,
             )
             # Check if Nova proposed an action instead of executing it
             # (e.g. "Here's a draft tweet — shall I post it?")
@@ -2463,9 +2477,9 @@ Additional Examples for Background:
         else:
             task = f"{context_prefix}User request: {message}"
 
-        # Inject validated tool routing hints (non-restrictive — agent may use others)
+        # Inject validated tool routing hints (restrictive — agent scoped to these + safe readonly tools)
         if tool_hints:
-            task += f"\n\nSuggested tools: {', '.join(tool_hints)}"
+            task += f"\n\nTools for this task: {', '.join(tool_hints)}"
 
         # Pre-resolve contacts for communication tasks — ONLY for the trusted principal.
         # Never expose the contacts list to untrusted channels or callers.
