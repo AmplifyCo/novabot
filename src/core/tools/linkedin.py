@@ -1,7 +1,7 @@
 """LinkedIn Tool — post text and articles to LinkedIn on principal's behalf.
 
-Uses LinkedIn UGC Posts API (v2) with OAuth 2.0 3-legged token.
-This is the official API — no browser automation, no bot risk.
+Uses LinkedIn Posts REST API (replaces legacy UGC Posts API).
+Requires Linkedin-Version header and OAuth 2.0 3-legged token.
 
 Setup (one-time):
     python scripts/linkedin_auth.py
@@ -12,6 +12,9 @@ Environment variables required:
 
 Rate limits:
     150 posts/day per member (official LinkedIn limit)
+
+API docs:
+    https://learn.microsoft.com/en-us/linkedin/marketing/community-management/shares/posts-api
 """
 
 import logging
@@ -24,43 +27,109 @@ from ..types import ToolResult
 
 logger = logging.getLogger(__name__)
 
-_UGC_POSTS_URL = "https://api.linkedin.com/v2/ugcPosts"
-_RESTLI_HEADER = {"X-Restli-Protocol-Version": "2.0.0"}
+# ── LinkedIn Content Composition Guide ────────────────────────────────────────
+# This guide is embedded in the tool description so the agent reads it before
+# composing any LinkedIn post. It covers length tiers, formatting, and quality.
+
+_CONTENT_GUIDE = """\
+
+POST LENGTH TIERS:
+• 𝘀𝗵𝗼𝗿𝘁 — 1-3 lines (100-300 chars). Punchy insight, hot take, or provocative question. \
+No fluff, no hashtags needed. Think "shower thought for professionals."
+• 𝗺𝗲𝗱𝗶𝘂𝗺 (default) — 5-10 lines (500-1200 chars). Structured insight: \
+hook line → context/story → key takeaway or question. 3-5 hashtags at end.
+• 𝗹𝗼𝗻𝗴 — 12-25 lines (1500-3000 chars). Thought leadership: \
+compelling hook → story/data → detailed analysis with bullet points → \
+lessons/takeaways → call to action or question. Use Unicode formatting for structure. 3-5 hashtags.
+
+LINKEDIN FORMATTING (no markdown — use Unicode):
+  𝗕𝗼𝗹𝗱 text       → Use Unicode Mathematical Sans-Serif Bold (𝗔-𝗭, 𝗮-𝘇) for headers and key phrases
+  𝘐𝘵𝘢𝘭𝘪𝘤 text      → Use Unicode Mathematical Sans-Serif Italic (𝘈-𝘡, 𝘢-𝘻) for emphasis
+  • Bullet points  → Use • for lists (not - or *)
+  → Arrows         → Use → or ➜ for flow/sequence
+  ✦ Stars          → Use ✦ or ★ for highlights
+  ─── Dividers     → Use ─── or ═══ between sections
+  ① Numbers        → Use ①②③④⑤ for numbered lists
+  Spacing          → Use blank lines between paragraphs for readability
+  NEVER use markdown (#, **, _, ```) — LinkedIn renders it as raw text.
+
+QUALITY RULES:
+  1. HOOK FIRST — First line must stop the scroll. Lead with a bold claim, question, \
+or surprising stat. Never start with "I'm excited to share..." or "In today's world..."
+  2. ONE IDEA — Each post should nail ONE clear idea, not ramble across topics.
+  3. WHITE SPACE — Short paragraphs (1-3 sentences). Walls of text get skipped.
+  4. AUTHENTIC VOICE — Write as the principal would speak. Professional but human, \
+not corporate jargon. Show personality.
+  5. END STRONG — Close with a question, call to action, or memorable one-liner. \
+Never end with just hashtags.
+  6. HASHTAGS — Place at the very end, separated by a blank line. 3-5 relevant ones. \
+Mix broad (#AI, #Tech) with niche (#MLOps, #FounderLife).
+"""
+
+# New Posts REST API (replaces legacy /v2/ugcPosts)
+_POSTS_URL = "https://api.linkedin.com/rest/posts"
+
+# LinkedIn API version — YYYYMM format, update periodically
+_LINKEDIN_VERSION = "202602"
+
+
+def _base_headers(access_token: str) -> dict:
+    """Standard headers required by all LinkedIn REST API calls."""
+    return {
+        "Authorization": f"Bearer {access_token}",
+        "X-Restli-Protocol-Version": "2.0.0",
+        "Linkedin-Version": _LINKEDIN_VERSION,
+    }
 
 
 class LinkedInTool(BaseTool):
-    """Tool to post to LinkedIn on principal's behalf via the official API.
+    """Tool to post to LinkedIn on principal's behalf via the official Posts REST API.
 
     Supports text posts and article/URL shares. Uses OAuth 2.0 — no browser
     automation, no ToS violation, no ban risk.
+
+    Post URL returned on creation so user can verify directly.
     """
 
     name = "linkedin"
     description = (
-        "Tool to post to LinkedIn on principal's behalf using the official LinkedIn API. "
-        "Use for: publishing professional insights, sharing articles with commentary, "
-        "posting thoughts on AI/tech trends to the professional network. "
+        "Post to LinkedIn on principal's behalf using the official LinkedIn API. "
         "Operations: 'post_text' (text only), 'post_article' (URL + commentary), "
-        "'delete_post' (remove a post by its URN/ID), 'get_posts' (verify recent posts). "
-        "Do NOT use for casual social posts — LinkedIn is professional context only."
+        "'delete_post' (remove a post by its URN/ID). "
+        "Returns the post URL on success.\n\n"
+        "IMPORTANT — You are a professional content writer for LinkedIn. "
+        "Follow the content guide below when composing posts:\n"
+        + _CONTENT_GUIDE
     )
     parameters = {
         "operation": {
             "type": "string",
-            "enum": ["post_text", "post_article", "delete_post", "get_posts"],
+            "enum": ["post_text", "post_article", "delete_post"],
             "description": (
                 "'post_text': publish a text-only LinkedIn post. "
-                "'post_article': share a URL with commentary (and optional title). "
-                "'delete_post': delete a post by its URN (e.g. 'urn:li:share:12345'). "
-                "'get_posts': fetch recent posts by the principal (verify posts exist)."
+                "'post_article': share a URL with commentary (and optional title/description). "
+                "'delete_post': delete a post by its URN (e.g. 'urn:li:share:12345')."
             ),
         },
         "text": {
             "type": "string",
             "description": (
-                "Post commentary / text. Required for post_text and post_article. "
-                "LinkedIn best practice: 1-3 short paragraphs, end with a question or insight. "
-                "Hashtags optional but effective (3-5 max)."
+                "The full post text to publish. You MUST compose this yourself following the "
+                "content guide in the tool description. Use Unicode bold (𝗮-𝘇) for headers, "
+                "Unicode italic (𝘢-𝘻) for emphasis, • for bullets, → for arrows, and blank "
+                "lines between paragraphs. NEVER use markdown syntax."
+            ),
+        },
+        "post_length": {
+            "type": "string",
+            "enum": ["short", "medium", "long"],
+            "description": (
+                "Length tier for the post. Determines structure and depth:\n"
+                "  'short': 1-3 lines, punchy insight or hot take (~100-300 chars)\n"
+                "  'medium': 5-10 lines, structured insight with hook+takeaway (~500-1200 chars)\n"
+                "  'long': 12-25 lines, thought leadership with story+analysis+CTA (~1500-3000 chars)\n"
+                "Default: 'medium'. When user says 'detailed post' or 'write a long post', use 'long'. "
+                "When user says 'quick thought' or just a brief mention, use 'short'."
             ),
         },
         "url": {
@@ -69,7 +138,11 @@ class LinkedInTool(BaseTool):
         },
         "title": {
             "type": "string",
-            "description": "Optional title override for the shared article.",
+            "description": "Optional title for the shared article.",
+        },
+        "article_description": {
+            "type": "string",
+            "description": "Optional description for the shared article.",
         },
         "visibility": {
             "type": "string",
@@ -78,9 +151,21 @@ class LinkedInTool(BaseTool):
         },
         "post_urn": {
             "type": "string",
-            "description": "Post URN to delete. Required for 'delete_post'. Format: 'urn:li:share:12345'.",
+            "description": "Post URN for delete_post. Format: 'urn:li:share:12345'.",
         },
     }
+
+    def to_anthropic_tool(self):
+        """Override — only operation is required; other params are contextual."""
+        return {
+            "name": self.name,
+            "description": self.description,
+            "input_schema": {
+                "type": "object",
+                "properties": self.parameters,
+                "required": ["operation"],
+            },
+        }
 
     def __init__(self, access_token: str, person_urn: str):
         """
@@ -97,8 +182,10 @@ class LinkedInTool(BaseTool):
         text: Optional[str] = None,
         url: Optional[str] = None,
         title: Optional[str] = None,
+        article_description: Optional[str] = None,
         visibility: str = "PUBLIC",
         post_urn: Optional[str] = None,
+        post_length: str = "medium",
         **kwargs,
     ) -> ToolResult:
         if operation == "delete_post":
@@ -106,123 +193,81 @@ class LinkedInTool(BaseTool):
                 return ToolResult(success=False, error="'post_urn' is required for delete_post")
             return await self._delete_post(post_urn.strip())
 
-        if operation == "get_posts":
-            return await self._get_posts()
-
         if not text or not text.strip():
             return ToolResult(success=False, error="'text' is required")
+
+        # Log the requested post length for debugging
+        logger.info(f"LinkedIn post_length={post_length}, text_len={len(text.strip())}")
 
         if operation == "post_text":
             return await self._post_text(text.strip(), visibility)
         elif operation == "post_article":
             if not url or not url.strip():
                 return ToolResult(success=False, error="'url' is required for post_article")
-            return await self._post_article(text.strip(), url.strip(), title, visibility)
+            return await self._post_article(
+                text.strip(), url.strip(), title, article_description, visibility
+            )
         else:
             return ToolResult(success=False, error=f"Unknown operation: {operation}")
 
     # ── Private helpers ───────────────────────────────────────────────────────
 
     async def _post_text(self, text: str, visibility: str) -> ToolResult:
+        """Create a text-only LinkedIn post via Posts REST API."""
         body = {
             "author": self.person_urn,
+            "commentary": text,
+            "visibility": visibility,
+            "distribution": {
+                "feedDistribution": "MAIN_FEED",
+                "targetEntities": [],
+                "thirdPartyDistributionChannels": [],
+            },
             "lifecycleState": "PUBLISHED",
-            "specificContent": {
-                "com.linkedin.ugc.ShareContent": {
-                    "shareCommentary": {"text": text},
-                    "shareMediaCategory": "NONE",
-                }
-            },
-            "visibility": {
-                "com.linkedin.ugc.MemberNetworkVisibility": visibility
-            },
+            "isReshareDisabledByAuthor": False,
         }
-        return await self._call_api(body)
+        return await self._create_post(body)
 
     async def _post_article(
         self,
         text: str,
         url: str,
         title: Optional[str],
+        description: Optional[str],
         visibility: str,
     ) -> ToolResult:
-        media: dict = {"status": "READY", "originalUrl": url}
+        """Create an article/URL share post via Posts REST API."""
+        article: dict = {"source": url}
         if title:
-            media["title"] = {"text": title}
+            article["title"] = title
+        if description:
+            article["description"] = description
 
         body = {
             "author": self.person_urn,
+            "commentary": text,
+            "visibility": visibility,
+            "distribution": {
+                "feedDistribution": "MAIN_FEED",
+                "targetEntities": [],
+                "thirdPartyDistributionChannels": [],
+            },
+            "content": {
+                "article": article,
+            },
             "lifecycleState": "PUBLISHED",
-            "specificContent": {
-                "com.linkedin.ugc.ShareContent": {
-                    "shareCommentary": {"text": text},
-                    "shareMediaCategory": "ARTICLE",
-                    "media": [media],
-                }
-            },
-            "visibility": {
-                "com.linkedin.ugc.MemberNetworkVisibility": visibility
-            },
+            "isReshareDisabledByAuthor": False,
         }
-        return await self._call_api(body)
-
-    async def _get_posts(self, count: int = 5) -> ToolResult:
-        """Fetch recent posts by the principal (requires r_member_social scope)."""
-        from urllib.parse import quote
-        encoded_author = quote(self.person_urn, safe="")
-        url = f"{_UGC_POSTS_URL}?q=authors&authors=List({encoded_author})&count={count}"
-        headers = {
-            **_RESTLI_HEADER,
-            "Authorization": f"Bearer {self.access_token}",
-        }
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(
-                    url, headers=headers, timeout=aiohttp.ClientTimeout(total=30)
-                ) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        elements = data.get("elements", [])
-                        if not elements:
-                            return ToolResult(success=True, output="No recent LinkedIn posts found.")
-                        lines = []
-                        for post in elements:
-                            post_id = post.get("id", "unknown")
-                            text = (
-                                post.get("specificContent", {})
-                                .get("com.linkedin.ugc.ShareContent", {})
-                                .get("shareCommentary", {})
-                                .get("text", "(no text)")
-                            )
-                            created = post.get("created", {}).get("time", "")
-                            lines.append(f"- [{post_id}] {text[:120]}")
-                        return ToolResult(
-                            success=True,
-                            output=f"Recent LinkedIn posts ({len(elements)}):\n" + "\n".join(lines),
-                        )
-                    elif resp.status == 403:
-                        return ToolResult(
-                            success=False,
-                            error="Cannot read posts — r_member_social scope not granted. Re-run linkedin_auth.py to add this permission.",
-                        )
-                    else:
-                        error_body = await resp.text()
-                        return ToolResult(
-                            success=False,
-                            error=f"LinkedIn API error {resp.status}: {error_body[:200]}",
-                        )
-        except Exception as e:
-            logger.error(f"LinkedIn get_posts failed: {e}", exc_info=True)
-            return ToolResult(success=False, error=f"Failed to fetch posts: {e}")
+        return await self._create_post(body)
 
     async def _delete_post(self, post_urn: str) -> ToolResult:
-        """Delete a LinkedIn post by URN."""
+        """Delete a LinkedIn post by URN via Posts REST API."""
         from urllib.parse import quote
         encoded_urn = quote(post_urn, safe="")
-        delete_url = f"{_UGC_POSTS_URL}/{encoded_urn}"
+        delete_url = f"{_POSTS_URL}/{encoded_urn}"
         headers = {
-            **_RESTLI_HEADER,
-            "Authorization": f"Bearer {self.access_token}",
+            **_base_headers(self.access_token),
+            "X-RestLi-Method": "DELETE",
         }
         try:
             async with aiohttp.ClientSession() as session:
@@ -232,6 +277,11 @@ class LinkedInTool(BaseTool):
                     if resp.status == 204:
                         logger.info(f"LinkedIn post deleted: {post_urn}")
                         return ToolResult(success=True, output=f"Post deleted: {post_urn}")
+                    elif resp.status == 401:
+                        return ToolResult(
+                            success=False,
+                            error="LinkedIn access token expired. Run: python scripts/linkedin_auth.py to refresh.",
+                        )
                     else:
                         error_body = await resp.text()
                         logger.error(f"LinkedIn delete {resp.status}: {error_body[:300]}")
@@ -243,29 +293,35 @@ class LinkedInTool(BaseTool):
             logger.error(f"LinkedIn delete failed: {e}", exc_info=True)
             return ToolResult(success=False, error=f"Delete failed: {e}")
 
-    async def _call_api(self, body: dict) -> ToolResult:
+    async def _create_post(self, body: dict) -> ToolResult:
+        """Create a post via LinkedIn Posts REST API."""
         headers = {
-            **_RESTLI_HEADER,
-            "Authorization": f"Bearer {self.access_token}",
+            **_base_headers(self.access_token),
             "Content-Type": "application/json",
         }
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.post(
-                    _UGC_POSTS_URL, json=body, headers=headers, timeout=aiohttp.ClientTimeout(total=30)
+                    _POSTS_URL, json=body, headers=headers,
+                    timeout=aiohttp.ClientTimeout(total=30),
                 ) as resp:
                     if resp.status == 201:
-                        post_id = resp.headers.get("X-RestLi-Id", "unknown")
-                        logger.info(f"LinkedIn post created: {post_id}")
+                        post_id = resp.headers.get("x-restli-id", "unknown")
+                        from urllib.parse import quote
+                        post_url = f"https://www.linkedin.com/feed/update/{quote(post_id, safe=':')}"
+                        logger.info(f"LinkedIn post created: {post_id} — {post_url}")
                         return ToolResult(
                             success=True,
-                            output=f"LinkedIn post published (ID: {post_id})",
-                            metadata={"post_id": post_id},
+                            output=(
+                                f"LinkedIn post published!\n"
+                                f"Post ID: {post_id}\n"
+                                f"URL: {post_url}"
+                            ),
+                            metadata={"post_id": post_id, "post_url": post_url},
                         )
                     else:
                         error_body = await resp.text()
                         logger.error(f"LinkedIn API {resp.status}: {error_body[:300]}")
-                        # Token expired = 401; provide clear action
                         if resp.status == 401:
                             return ToolResult(
                                 success=False,

@@ -48,7 +48,10 @@ REDIRECT_URI = f"{BASE_URL}/linkedin/callback"
 
 # openid + profile lets dashboard auto-fetch your person URN via /v2/userinfo.
 # Requires "Sign In with LinkedIn using OpenID Connect" product on your app.
-# r_member_social lets Nova verify its own posts exist (read-back after posting).
+# w_member_social — create/edit/delete posts on behalf of the member.
+# r_member_social — read posts by author (RESTRICTED: requires LinkedIn approval).
+#   If r_member_social isn't approved, Nova can still verify individual posts
+#   by URN using 'get_post' (works with w_member_social alone).
 SCOPE = "openid profile w_member_social r_member_social"
 
 # ── Build auth URL ─────────────────────────────────────────────────────────────

@@ -446,11 +446,21 @@ class XTool(BaseTool):
         if resp.status_code in (200, 201):
             data = resp.json()
             tweet_id = data.get("data", {}).get("id", "unknown")
-            logger.info(f"Tweet posted: {tweet_id}")
+            # Build tweet URL using cached username
+            tweet_url = f"https://x.com/i/status/{tweet_id}"
+            try:
+                if self.user_cache_file.exists():
+                    cached = json.load(open(self.user_cache_file))
+                    handle = cached.get("username")
+                    if handle:
+                        tweet_url = f"https://x.com/{handle}/status/{tweet_id}"
+            except Exception:
+                pass
+            logger.info(f"Tweet posted: {tweet_id} — {tweet_url}")
             return ToolResult(
                 success=True,
-                output=f"Posted to X. Tweet ID: {tweet_id}",
-                metadata={"tweet_id": tweet_id}
+                output=f"Posted to X!\nTweet ID: {tweet_id}\nURL: {tweet_url}",
+                metadata={"tweet_id": tweet_id, "tweet_url": tweet_url}
             )
         else:
             return self._handle_error(resp)
@@ -503,11 +513,20 @@ class XTool(BaseTool):
 
         data = resp.json()
         tweet_id = data.get("data", {}).get("id", "unknown")
-        logger.info(f"Tweet posted to community {resolved_id} (shared with followers): {tweet_id}")
+        tweet_url = f"https://x.com/i/status/{tweet_id}"
+        try:
+            if self.user_cache_file.exists():
+                cached = json.load(open(self.user_cache_file))
+                handle = cached.get("username")
+                if handle:
+                    tweet_url = f"https://x.com/{handle}/status/{tweet_id}"
+        except Exception:
+            pass
+        logger.info(f"Tweet posted to community {resolved_id}: {tweet_id} — {tweet_url}")
         return ToolResult(
             success=True,
-            output=f"Posted to X Community ({community_id}) and shared with followers. Tweet ID: {tweet_id}",
-            metadata={"tweet_id": tweet_id, "community_id": resolved_id}
+            output=f"Posted to X Community ({community_id}) and shared with followers.\nTweet ID: {tweet_id}\nURL: {tweet_url}",
+            metadata={"tweet_id": tweet_id, "tweet_url": tweet_url, "community_id": resolved_id}
         )
 
     async def _resolve_community_id(self, name_or_id: str) -> Optional[str]:

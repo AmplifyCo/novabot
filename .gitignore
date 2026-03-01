@@ -1,6 +1,9 @@
 #ssh key
 DigitalClone.pem
 
+# Deploy script (contains host-specific paths)
+scripts/deploy.sh
+
 # Data directories (brain, logs, credentials)
 data/
 !data/core_brain_snapshot.json
