@@ -42,12 +42,16 @@ class AttentionEngine:
         telegram_notifier,
         owner_name: str = "User",
         purpose: Optional[NovaPurpose] = None,
+        pattern_detector=None,
+        contact_intelligence=None,
     ):
         self.brain = digital_brain
         self.llm = llm_client
         self.telegram = telegram_notifier
         self.owner_name = owner_name
         self.purpose = purpose or NovaPurpose()
+        self.pattern_detector = pattern_detector          # 2A: behavioral patterns
+        self.contact_intelligence = contact_intelligence  # 2D: contact tracking
         self._log_path = Path("data/attention_log.json")
         self._is_running = False
 
@@ -128,6 +132,28 @@ class AttentionEngine:
                     parts.append(f"Recent activity:\n{recent[:800]}")
         except Exception as e:
             logger.debug(f"Memory snippet error: {e}")
+
+        # ── Inject detected behavioral patterns (2A) ──
+        if self.pattern_detector:
+            try:
+                patterns_ctx = self.pattern_detector.get_patterns_context()
+                if patterns_ctx:
+                    parts.append(patterns_ctx)
+            except Exception as e:
+                logger.debug(f"Pattern context error: {e}")
+
+        # ── Inject contact intelligence (2D) — follow-ups + stale contacts ──
+        if self.contact_intelligence:
+            try:
+                followups = self.contact_intelligence.get_followup_context()
+                if followups:
+                    parts.append(followups)
+                stale = self.contact_intelligence.get_stale_contacts(days=14)
+                if stale:
+                    stale_lines = [f"  - {s['name']}: last contacted {s['last_date']}" for s in stale[:3]]
+                    parts.append("People not contacted recently:\n" + "\n".join(stale_lines))
+            except Exception as e:
+                logger.debug(f"Contact intelligence attention error: {e}")
 
         return "\n\n".join(parts) if parts else ""
 

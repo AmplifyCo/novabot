@@ -22,45 +22,56 @@ Structured preference model built incrementally from learning extraction. Inject
 
 ---
 
-## Phase 2: Anticipatory Intelligence
+## Phase 2: Anticipatory Intelligence (IMPLEMENTED — 2A, 2C, 2D)
 *From reactive to predictive — Nova acts before you ask*
 
-### 2A. Pattern Detection Engine
-Scan episodic memory weekly. Extract time-action patterns ("You post on LinkedIn every Tuesday"). Store as patterns.json. Feed to attention engine.
+### 2A. Pattern Detection Engine (IMPLEMENTED)
+Background 12h scan of episodic memory. Extracts time-action patterns ("You post on LinkedIn every Tuesday"). Stores as patterns.json. Fed to attention engine for proactive suggestions.
 **New file**: brain/pattern_detector.py
+**Wired into**: attention_engine.py, main.py
+**Latency**: +1 Gemini Flash call per 12h (background)
 
 ### 2B. Proactive Drafts
 Attention engine evolves from "observe and report" to "observe, predict, prepare." Tuesday morning: "I've drafted your LinkedIn post based on this week's work." Before meetings: surface context from last conversation with that person.
-**Modify**: brain/attention_engine.py
+**Status**: Not yet implemented
 
-### 2C. Smart Scheduling (Circadian Rhythm)
-Time-based behavior modifiers. Morning = briefing mode. Work hours = professional, action-oriented. Evening = lighter, reflective. Weekend = minimal interruption.
-**New file**: brain/circadian_rhythm.py
+### 2C. Smart Scheduling (Circadian Rhythm) (IMPLEMENTED)
+Time-based behavior modifiers injected into all conversation prompts. Morning = briefing mode. Work hours = professional (default). Evening = lighter, reflective. Late night = minimal.
+**New file**: brain/circadian.py
+**Wired into**: conversation_manager.py (_build_system_prompt + _chat)
+**Latency**: Zero (rule-based, static methods)
 
-### 2D. Contact Intelligence
-Remember relationships, not just names. Track interaction history and communication preferences per contact. "Last time you emailed Sarah, she asked about Q2 — you never replied."
-**Modify**: brain/digital_clone_brain.py (extend contact store)
+### 2D. Contact Intelligence (IMPLEMENTED)
+Per-contact interaction history tracked in JSON. Surfaces "Last time you emailed Sarah..." and pending follow-ups in execution plans. Stale contacts surfaced by attention engine.
+**New file**: brain/contact_intelligence.py
+**Wired into**: conversation_manager.py, attention_engine.py, main.py
+**Latency**: Zero (structured data, no LLM calls)
 
 ---
 
-## Phase 3: Reasoning & Judgment
+## Phase 3: Reasoning & Judgment (IMPLEMENTED — 3B, 3C, 3D)
 *From command executor to thinking partner*
 
 ### 3A. Pushback & Alternatives
 Post-draft evaluation layer. Before irreversible actions, check timing, tone, consistency. "You could post this now, but spacing it to Monday would get better engagement."
-**New file**: brain/judgment_engine.py
+**Status**: Not yet implemented
 
-### 3B. Reasoning Transparency
-Task runner and goal decomposer expose reasoning as brief "APPROACH" preamble. "I'm doing this in two steps: research then draft. I'll check in after step 1."
-**Modify**: task_runner.py, goal_decomposer.py
+### 3B. Reasoning Transparency (IMPLEMENTED)
+Preflight APPROACH section surfaced to user via progress callback before agent execution. Task runner plan notifications enhanced with tools summary and approach reasoning.
+**Modified**: conversation_manager.py (_extract_approach + progress_callback), task_runner.py (_notify_plan)
+**Latency**: Zero (uses existing preflight reasoning, just surfaces it)
 
-### 3C. Quality Self-Assessment
-Every substantive response gets lightweight self-eval (confidence: high/medium/low). Low-confidence sections flagged. "I'm confident about the data but the competitor analysis is thin — want me to dig deeper?"
-**Modify**: conversation_manager.py (extend CriticAgent)
+### 3C. Quality Self-Assessment (IMPLEMENTED)
+Substantive responses (>150 chars) get lightweight Gemini Flash self-eval (high/medium/low confidence). Only low-confidence areas surfaced naturally: "The competitor analysis is thin — want me to dig deeper?"
+**New file**: brain/self_assessor.py
+**Wired into**: conversation_manager.py (action + question blocks), main.py
+**Latency**: +1 Gemini Flash call per substantive response (~1s, fail-open)
 
-### 3D. Multi-Turn Reasoning (Deliberation)
-For complex questions, Nova gathers evidence from multiple sources, weighs them, produces structured recommendation with trade-offs. Triggered by intent classification detecting "needs judgment."
-**New file**: brain/deliberation.py
+### 3D. Multi-Turn Reasoning (Deliberation) (IMPLEMENTED)
+Keyword-triggered ("should I", "pros and cons", "compare") → gathers evidence from brain context + episodic memory → produces EVIDENCE/TENSIONS/RECOMMENDATION/CAVEATS structure. Replaces standard preflight for judgment questions.
+**Uses**: brain/self_assessor.py (SelfAssessor.deliberate + needs_deliberation)
+**Wired into**: conversation_manager.py (preflight upgrade), main.py
+**Latency**: +1 Gemini Flash call for judgment questions only (~2s, fail-open)
 
 ---
 

@@ -426,6 +426,20 @@ Models: Claude Opus/Sonnet/Haiku + SmolLM2 (local fallback)"""
 
             logger.info("🧠 WorkingMemory + EpisodicMemory + IntentDataCollector + MemoryQueryTool wired")
 
+            # ── Phase 2+3: Intelligence Upgrade ──────────────────────────
+            # Contact Intelligence (2D) — per-contact interaction tracking
+            from src.core.brain.contact_intelligence import ContactIntelligence
+            contact_intelligence = ContactIntelligence()
+            conversation_manager.contact_intelligence = contact_intelligence
+            logger.info("🤝 ContactIntelligence initialized")
+
+            # Self-Assessor (3C + 3D) — quality assessment + deliberation
+            from src.core.brain.self_assessor import SelfAssessor
+            _gemini_for_assessor = gemini_client if 'gemini_client' in locals() else None
+            self_assessor = SelfAssessor(gemini_client=_gemini_for_assessor)
+            conversation_manager.self_assessor = self_assessor
+            logger.info("🎯 SelfAssessor initialized (quality assessment + deliberation)")
+
             # Restore timezone override from working memory (persists across restarts)
             if working_memory.timezone_override:
                 tz_override = working_memory.timezone_override
@@ -552,15 +566,30 @@ Models: Claude Opus/Sonnet/Haiku + SmolLM2 (local fallback)"""
         # Start AttentionEngine (proactive observations every 6h — driven by NovaPurpose)
         # Enabled by default — disable by setting ATTENTION_ENGINE_ENABLED=false in .env
         attention_task = None
+        pattern_task = None
         if os.getenv("ATTENTION_ENGINE_ENABLED", "true").lower() == "true":
             _gemini_for_attention = gemini_client if 'gemini_client' in locals() else None
             _nova_purpose = NovaPurpose()
+
+            # Pattern Detector (2A) — background 12h scan of episodic memory
+            from src.core.brain.pattern_detector import PatternDetector
+            _pattern_detector = PatternDetector(
+                episodic_memory=episodic_memory,
+                gemini_client=_gemini_for_attention,
+            )
+            pattern_task = asyncio.create_task(_pattern_detector.start())
+            logger.info("📊 PatternDetector started (12h scan cycle)")
+
+            # Wire pattern detector + contact intelligence into attention engine
+            _contact_intel = contact_intelligence if 'contact_intelligence' in locals() else None
             _attention_engine = AttentionEngine(
                 digital_brain=digital_brain,
                 llm_client=_gemini_for_attention,
                 telegram_notifier=telegram,
                 owner_name=config.owner_name,
                 purpose=_nova_purpose,
+                pattern_detector=_pattern_detector,
+                contact_intelligence=_contact_intel,
             )
             attention_task = asyncio.create_task(_attention_engine.start())
             logger.info("🔍 AttentionEngine started (proactive observations every 6h)")
@@ -668,6 +697,8 @@ Models: Claude Opus/Sonnet/Haiku + SmolLM2 (local fallback)"""
                 dashboard_task.cancel()
             if 'attention_task' in locals() and attention_task:
                 attention_task.cancel()
+            if 'pattern_task' in locals() and pattern_task:
+                pattern_task.cancel()
             await telegram.notify("Agent shutting down", level="warning")
 
     except Exception as e:

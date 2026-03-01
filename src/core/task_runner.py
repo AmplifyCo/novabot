@@ -590,15 +590,20 @@ class TaskRunner:
         return text[:limit].replace("*", "").replace("_", "").replace("`", "").replace("[", "").replace("]", "")
 
     async def _notify_plan(self, task: Task, subtasks: list):
-        """Send a compact numbered plan after decomposition."""
+        """Send a compact numbered plan with reasoning transparency (3B)."""
         irreversible_count = sum(1 for st in subtasks if not st.reversible)
+        # 3B: Show approach reasoning — tools and strategy
+        tools_used = set(t for st in subtasks for t in (st.tool_hints or []))
+        approach = f"Approach: {len(subtasks)} steps"
+        if tools_used:
+            approach += f" using {', '.join(sorted(tools_used))}"
         steps = " | ".join(
             f"{i}. {'⚠️ ' if not st.reversible else ''}{self._safe(st.description, 40)}"
             for i, st in enumerate(subtasks, 1)
         )
-        msg = f"📋 {len(subtasks)} steps: {steps}"
+        msg = f"📋 {approach}\n{steps}"
         if irreversible_count:
-            msg += f"\n⚠️ {irreversible_count} irreversible step(s) — reply 'stop task' to cancel before they run."
+            msg += f"\n⚠️ {irreversible_count} irreversible — reply 'stop task' to cancel."
         await self._notify_channel(task, msg)
 
     async def _notify_step_start(self, task: Task, step: int, total: int, description: str):

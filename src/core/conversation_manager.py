@@ -172,6 +172,8 @@ class ConversationManager:
         self.intent_data_collector: Optional[IntentDataCollector] = None  # injected by main.py
         self._current_tone_signal = None  # set per-message by tone analyzer
         self.critic = None  # CriticAgent for inline content reflection (injected by main.py)
+        self.contact_intelligence = None  # ContactIntelligence for interaction tracking (injected by main.py)
+        self.self_assessor = None  # SelfAssessor for quality assessment + deliberation (injected by main.py)
 
         # Context Thalamus: token budgeting and history management
         from src.core.context_thalamus import ContextThalamus
@@ -921,6 +923,25 @@ class ConversationManager:
         ),
     }
 
+    def _extract_contact_from_message(self, message: str) -> Optional[str]:
+        """Extract a person's name from the message for contact intelligence (2D).
+
+        Matches against known contacts in the contacts tool registry.
+        Returns the contact name or None.
+        """
+        try:
+            contacts_tool = self.agent.tools.get_tool("contacts")
+            if not contacts_tool or not hasattr(contacts_tool, '_contacts') or not contacts_tool._contacts:
+                return None
+            msg_lower = message.lower()
+            for key, contact in contacts_tool._contacts.items():
+                name = contact.get("name", key)
+                if key.lower() in msg_lower or name.lower() in msg_lower:
+                    return name
+        except Exception:
+            pass
+        return None
+
     def _detect_persona(self, message: str, intent: Dict[str, Any]) -> str:
         """Detect the appropriate persona for this task based on intent and tools.
 
@@ -1182,6 +1203,7 @@ class ConversationManager:
                 pass
 
         # Pre-flight reasoning for complex tasks (sonnet/quality tier only)
+        # 3D: Use deliberation for judgment-heavy questions, else standard preflight
         _preflight = ""
         if action == "action":
             _model_tier = self._get_model_tier(message)
@@ -1192,7 +1214,27 @@ class ConversationManager:
                         brain_ctx = await self.brain.get_relevant_context(message) or ""
                     except Exception:
                         pass
-                _preflight = await self._preflight_reasoning(message, intent, brain_ctx)
+
+                if self.self_assessor and self.self_assessor.needs_deliberation(message, intent):
+                    # 3D: Multi-turn deliberation for judgment questions
+                    episodic_ctx = ""
+                    if self.episodic_memory:
+                        try:
+                            episodic_ctx = await self.episodic_memory.recall(message, n=3) or ""
+                        except Exception:
+                            pass
+                    _preflight = await self.self_assessor.deliberate(message, brain_ctx, episodic_ctx)
+                if not _preflight:
+                    _preflight = await self._preflight_reasoning(message, intent, brain_ctx)
+
+        # ── Reasoning transparency: surface approach to user (3B) ──
+        if _preflight and self._progress_callback:
+            try:
+                approach = self._extract_approach(_preflight)
+                if approach:
+                    await self._progress_callback(f"Approach: {approach}")
+            except Exception:
+                pass  # non-critical
 
         # Build enriched execution plan:
         # Intent (what to do) + Tool hints (which tools) + Memory (context) → agent task
@@ -1291,6 +1333,23 @@ class ConversationManager:
                 except Exception:
                     pass  # non-critical
 
+            # ── Contact interaction recording (2D) ──
+            if self.contact_intelligence:
+                try:
+                    _comm_tools = {"email_send", "email", "send_whatsapp_message", "make_phone_call"}
+                    _tool = tool_hints[0] if tool_hints else ""
+                    if _tool in _comm_tools:
+                        _contact = self._extract_contact_from_message(message)
+                        if _contact:
+                            self.contact_intelligence.record_interaction(
+                                contact_name=_contact,
+                                channel=_tool.replace("_send", "").replace("send_", "").replace("make_", "").replace("_message", "").replace("_call", ""),
+                                direction="outbound",
+                                summary=(inferred_task or message)[:100],
+                            )
+                except Exception:
+                    pass  # non-critical
+
             # ── Thread tracking for conversation continuity ──
             if self.working_memory and persona in ("content_writer", "researcher", "communicator"):
                 _topic = (inferred_task or message)[:80]
@@ -1299,6 +1358,17 @@ class ConversationManager:
                     self.working_memory.resolve_thread(_topic)
                 else:
                     self.working_memory.update_thread(_topic, status="in_progress")
+
+            # ── Quality self-assessment for action responses (3C) ──
+            if self.self_assessor and len(response) > 150:
+                try:
+                    assessment = await self.self_assessor.assess_response(message, response, persona)
+                    if assessment:
+                        suffix = self.self_assessor.format_assessment(assessment)
+                        if suffix:
+                            response += suffix
+                except Exception:
+                    pass  # fail-open
 
             return response
 
@@ -1309,7 +1379,7 @@ class ConversationManager:
 
             # Build system prompt with researcher persona for deeper answers
             system_prompt = await self._build_system_prompt(message, persona="researcher")
-            
+
             # Use agent_task (enriched with history) so agent has multi-turn context
             response = await self.agent.run(
                 task=agent_task,
@@ -1319,6 +1389,18 @@ class ConversationManager:
             )
             # Learn from question conversations (preferences, calibration, etc.)
             await self._learn_from_conversation(message, response)
+
+            # ── Quality self-assessment for research answers (3C) ──
+            if self.self_assessor and len(response) > 200:
+                try:
+                    assessment = await self.self_assessor.assess_response(message, response, "researcher")
+                    if assessment:
+                        suffix = self.self_assessor.format_assessment(assessment)
+                        if suffix:
+                            response += suffix
+                except Exception:
+                    pass  # fail-open
+
             return response
 
         elif action == "clarify":
@@ -1577,6 +1659,12 @@ RULES:
                 tone_inst = _tone_analyzer.calibration_instruction(self._current_tone_signal)
                 if tone_inst:
                     system_prompt += f"\n\nTONE ADAPTATION: {tone_inst}"
+
+            # ── Circadian rhythm: time-of-day behavior modifier (2C) ─
+            from src.core.brain.circadian import CircadianRhythm
+            circadian_ctx = CircadianRhythm.get_context()
+            if circadian_ctx:
+                system_prompt += f"\n\n{circadian_ctx}"
 
             # Primary: Gemini Flash via LiteLLM
             if self.gemini_client and self.gemini_client.enabled:
@@ -3093,6 +3181,25 @@ Additional Examples for Background:
             logger.debug(f"Preflight reasoning failed — skipping: {e}")
             return ""
 
+    @staticmethod
+    def _extract_approach(preflight: str) -> str:
+        """Extract APPROACH section from KNOW/NEED/APPROACH/RISK preflight (3B).
+
+        Returns a condensed 1-2 sentence approach, or '' if not found.
+        """
+        lines = preflight.split("\n")
+        capture, result = False, []
+        for line in lines:
+            upper = line.upper().strip()
+            if "APPROACH" in upper:
+                capture = True
+                continue
+            elif any(k in upper for k in ("RISK", "4.", "CAVEAT")):
+                break
+            elif capture and line.strip():
+                result.append(line.strip())
+        return " ".join(result[:3])[:200] if result else ""
+
     async def _build_execution_plan(self, intent: Dict[str, Any], message: str, persona: str = "", tool_performance: Optional[Dict] = None, preflight: str = "") -> str:
         """Enrich intent with memory context to build a comprehensive agent task.
 
@@ -3184,6 +3291,15 @@ Additional Examples for Background:
                     )
             except Exception as e:
                 logger.debug(f"Episodic recall skipped: {e}")
+
+        # ── Contact intelligence: pending follow-ups for communication tasks (2D) ─
+        if self.contact_intelligence:
+            try:
+                followup_ctx = self.contact_intelligence.get_followup_context()
+                if followup_ctx:
+                    task += f"\n\n{followup_ctx}"
+            except Exception as e:
+                logger.debug(f"Contact intelligence skipped: {e}")
 
         # ── Style examples: inject principal's past posts for voice matching ─
         if persona == "content_writer" and self.brain and hasattr(self.brain, 'identity'):
@@ -3658,6 +3774,12 @@ SECURITY OVERRIDE:
         persona_section = ""
         if persona and persona in self._PERSONAS:
             persona_section = f"\n\n{self._PERSONAS[persona]}"
+
+        # ── Circadian rhythm: time-of-day behavior modifier (2C) ─
+        from src.core.brain.circadian import CircadianRhythm
+        circadian_ctx = CircadianRhythm.get_context()
+        if circadian_ctx:
+            persona_section += f"\n\n{circadian_ctx}"
 
         return base_prompt + brain_context + wm_section + tone_section + persona_section
 
