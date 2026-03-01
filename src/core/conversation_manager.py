@@ -2232,10 +2232,19 @@ Additional Examples for Background:
 
         agent_task = (
             f"DEVOPS REQUEST from the principal:\n{command_text}\n\n"
-            f"You have access to bash, file_operations, and claude_cli tools.\n"
-            f"For simple commands, use bash directly.\n"
-            f"For complex multi-step analysis, delegate to claude_cli.\n"
-            f"Always show relevant output."
+            f"SYSTEM CONTEXT (this is a Nova bot server running on EC2):\n"
+            f"  Project root: /home/ec2-user/novabot/\n"
+            f"  Logs: data/logs/agent.log (app log), journalctl -u novabot (systemd)\n"
+            f"  Self-healing errors: data/logs/agent.log grep for 'ERROR'\n"
+            f"  Config: config/agent.yaml, .env (NEVER show .env contents)\n"
+            f"  Service: sudo systemctl status/restart novabot\n"
+            f"  Python: /home/ec2-user/novabot/venv/bin/python\n\n"
+            f"RULES:\n"
+            f"  - For errors/logs/status: use bash to check LOCAL files and services. Do NOT search the web.\n"
+            f"  - For simple commands, use bash directly.\n"
+            f"  - For complex multi-step analysis, delegate to claude_cli.\n"
+            f"  - Always show relevant output. Never summarize away raw data.\n"
+            f"  - NEVER expose credentials, API keys, or .env contents."
         )
 
         try:
