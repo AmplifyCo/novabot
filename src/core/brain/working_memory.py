@@ -27,6 +27,9 @@ _DEFAULT = {
     "session_count":      0,
     "last_active":        None,
     "timezone_override":  None,       # {"tz": "America/New_York", "label": "New York", "set_at": "ISO"}
+    "open_threads":       [],         # [{"topic": str, "status": str, "updated_at": str}] max 3
+    "recent_corrections": [],         # [{"what": str, "when": str}] max 3, auto-expire 24h
+    "preference_profile": {},         # {"food": ["Italian"], "style": ["concise"]}
 }
 
 _TONES = {
@@ -167,12 +170,166 @@ class WorkingMemory:
         unfinished = self._state.get("unfinished", [])
         if unfinished:
             items = "  • " + "\n  • ".join(unfinished)
-            parts.append(f"🔖 Items mentioned but not yet resolved:\n{items}")
+            parts.append(f"Items mentioned but not yet resolved:\n{items}")
+
+        corrections = self.get_recent_corrections(hours=24)
+        if corrections:
+            corr_items = ", ".join(c["what"] for c in corrections[-2:])
+            parts.append(f"Recent corrections from user: {corr_items}")
+
+        threads = self.get_open_threads()
+        if threads:
+            thread_items = ", ".join(
+                f"{t['topic']} [{t['status']}]" for t in threads
+            )
+            parts.append(f"Open threads from recent sessions: {thread_items}")
 
         if not parts:
             return ""
 
         return "WORKING MEMORY:\n" + "\n".join(parts)
+
+    # ── Open Threads (conversation continuity across sessions) ──────
+
+    _THREAD_EXPIRY_HOURS = 48
+
+    def update_thread(self, topic: str, status: str = "in_progress"):
+        """Track an ongoing topic thread for cross-session continuity."""
+        topic = topic.strip()[:80]
+        if not topic:
+            return
+        threads = self._state.get("open_threads", [])
+        # Update existing thread if same topic
+        for t in threads:
+            if t["topic"].lower() == topic.lower():
+                t["status"] = status
+                t["updated_at"] = datetime.now().isoformat()
+                self._save()
+                return
+        threads.append({
+            "topic": topic,
+            "status": status,
+            "updated_at": datetime.now().isoformat(),
+        })
+        # Keep max 3 (most recent)
+        if len(threads) > 3:
+            threads = threads[-3:]
+        self._state["open_threads"] = threads
+        self._save()
+
+    def resolve_thread(self, topic: str):
+        """Remove a thread when the task is completed."""
+        threads = self._state.get("open_threads", [])
+        self._state["open_threads"] = [
+            t for t in threads if topic.lower() not in t["topic"].lower()
+        ]
+        self._save()
+
+    def get_open_threads(self) -> list:
+        """Return active threads, pruning expired ones (>48h)."""
+        threads = self._state.get("open_threads", [])
+        now = datetime.now()
+        cutoff_seconds = self._THREAD_EXPIRY_HOURS * 3600
+        live = []
+        for t in threads:
+            try:
+                updated = datetime.fromisoformat(t["updated_at"])
+                if (now - updated).total_seconds() < cutoff_seconds:
+                    live.append(t)
+            except (ValueError, KeyError):
+                continue
+        if len(live) != len(threads):
+            self._state["open_threads"] = live
+            self._save()
+        return live
+
+    def is_new_session(self, gap_minutes: int = 30) -> bool:
+        """Check if this is a new session (gap since last_active > threshold)."""
+        last = self._state.get("last_active")
+        if not last:
+            return True
+        try:
+            last_dt = datetime.fromisoformat(last)
+            elapsed = (datetime.now() - last_dt).total_seconds() / 60
+            return elapsed > gap_minutes
+        except (ValueError, TypeError):
+            return True
+
+    def session_context(self) -> str:
+        """Return formatted open threads for session greeting injection."""
+        threads = self.get_open_threads()
+        if not threads:
+            return ""
+        lines = ["OPEN THREADS (topics from recent sessions):"]
+        for t in threads:
+            lines.append(f"  - {t['topic']} [{t['status']}]")
+        return "\n".join(lines)
+
+    # ── Recent Corrections (visible correction learning) ──────────
+
+    def add_correction(self, correction: str):
+        """Store a recent correction for visible acknowledgment."""
+        corrections = self._state.get("recent_corrections", [])
+        corrections.append({
+            "what": correction.strip()[:100],
+            "when": datetime.now().isoformat(),
+        })
+        if len(corrections) > 3:
+            corrections = corrections[-3:]
+        self._state["recent_corrections"] = corrections
+        self._save()
+
+    def get_recent_corrections(self, hours: int = 24) -> list:
+        """Return corrections from the last N hours, pruning expired ones."""
+        corrections = self._state.get("recent_corrections", [])
+        cutoff = datetime.now().timestamp() - (hours * 3600)
+        live = []
+        for c in corrections:
+            try:
+                when_ts = datetime.fromisoformat(c["when"]).timestamp()
+                if when_ts > cutoff:
+                    live.append(c)
+            except (ValueError, KeyError):
+                continue
+        if len(live) != len(corrections):
+            self._state["recent_corrections"] = live
+            self._save()
+        return live
+
+    # ── Preference Profile (structured preference model) ──────────
+
+    _MAX_PREFS_PER_CATEGORY = 5
+    _MAX_CATEGORIES = 10
+
+    def add_preference(self, category: str, preference: str):
+        """Add a structured preference learned from conversation."""
+        profile = self._state.get("preference_profile", {})
+        category = category.strip().lower()[:30]
+        preference = preference.strip()[:80]
+        if not category or not preference:
+            return
+        if category not in profile:
+            if len(profile) >= self._MAX_CATEGORIES:
+                return
+            profile[category] = []
+        existing_lower = [p.lower() for p in profile[category]]
+        if preference.lower() not in existing_lower:
+            profile[category].append(preference)
+            if len(profile[category]) > self._MAX_PREFS_PER_CATEGORY:
+                profile[category] = profile[category][-self._MAX_PREFS_PER_CATEGORY:]
+        self._state["preference_profile"] = profile
+        self._save()
+
+    def get_preference_summary(self) -> str:
+        """Return formatted preference profile for prompt injection."""
+        profile = self._state.get("preference_profile", {})
+        if not profile:
+            return ""
+        lines = ["OWNER PREFERENCES (learned from past conversations):"]
+        for category, prefs in sorted(profile.items()):
+            if prefs:
+                lines.append(f"  {category}: {', '.join(prefs)}")
+        return "\n".join(lines)
 
     # ── Pending Actions (confirmation loop fix) ─────────────────────
 

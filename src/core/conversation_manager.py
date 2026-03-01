@@ -595,6 +595,12 @@ class ConversationManager:
             self._current_tone_signal = _tone_analyzer.analyze(message)
             logger.debug(f"Tone: {self._current_tone_signal.register} (urgency={self._current_tone_signal.urgency:.1f})")
 
+            # ── Session continuity: detect new session for greeting ─────
+            self._is_new_session = (
+                self.working_memory.is_new_session(gap_minutes=30)
+                if self.working_memory else False
+            )
+
             # ── Interrupt detection: STOP / CANCEL background tasks ───────
             interrupt_response = self._handle_task_interrupt(message)
             if interrupt_response:
@@ -634,6 +640,7 @@ class ConversationManager:
                 self._detect_timezone_change(message)
 
             # ── Correction detection (store user corrections in episodic memory) ─
+            self._correction_just_detected = None  # reset each message
             _uid_corr = self._current_user_id or "unknown"
             _last_resp = self._last_bot_responses.get(_uid_corr, "")
             if _last_resp:
@@ -1284,6 +1291,15 @@ class ConversationManager:
                 except Exception:
                     pass  # non-critical
 
+            # ── Thread tracking for conversation continuity ──
+            if self.working_memory and persona in ("content_writer", "researcher", "communicator"):
+                _topic = (inferred_task or message)[:80]
+                _done_words = ("done", "posted", "sent", "completed", "created", "published")
+                if any(w in response.lower()[:150] for w in _done_words):
+                    self.working_memory.resolve_thread(_topic)
+                else:
+                    self.working_memory.update_thread(_topic, status="in_progress")
+
             return response
 
         elif action == "question":
@@ -1522,11 +1538,38 @@ RULES:
                 if wm_ctx:
                     brain_context_parts.append(wm_ctx)
 
+                # Correction acknowledgment
+                if getattr(self, '_correction_just_detected', None):
+                    brain_context_parts.append(
+                        "CORRECTION DETECTED: The user just corrected you. "
+                        "Acknowledge briefly ('Got it', 'Understood') and adjust. No excessive apology."
+                    )
+
+                # Session greeting with open threads
+                if getattr(self, '_is_new_session', False):
+                    thread_ctx = self.working_memory.session_context()
+                    if thread_ctx:
+                        brain_context_parts.append(
+                            thread_ctx + "\n"
+                            "SESSION GREETING: The user just returned. If an open thread relates "
+                            "to their message, briefly mention it. Otherwise skip."
+                        )
+
+                # Preference profile
+                pref_summary = self.working_memory.get_preference_summary()
+                if pref_summary:
+                    brain_context_parts.append(pref_summary)
+
             # Add Brain context to system prompt (capped to save tokens)
             if brain_context_parts:
                 brain_text = "\n\n".join(brain_context_parts)
-                if len(brain_text) > 1500:
-                    brain_text = brain_text[:1500] + "\n[context truncated]"
+                brain_text += (
+                    "\n\nMEMORY USAGE RULE: When drawing on a specific preference, past conversation, "
+                    "or known fact from context above, naturally reference it "
+                    "('Since you prefer...', 'You mentioned...'). Never fabricate."
+                )
+                if len(brain_text) > 1800:
+                    brain_text = brain_text[:1800] + "\n[context truncated]"
                 system_prompt += "\n\n" + brain_text
 
             # Inject tone adaptation from current message
@@ -1686,6 +1729,9 @@ User says "good morning" → none"""
                             source="llm_derived",
                             confidence=0.7
                         )
+                        # Also store in structured preference profile
+                        if self.working_memory:
+                            self.working_memory.add_preference(category, fact)
                         logger.info(f"Learned from conversation: [{category}] {fact} (source=llm_derived)")
 
         except Exception as e:
@@ -2738,6 +2784,10 @@ Additional Examples for Background:
                 tool_used="correction",
             )
             logger.info(f"Stored correction: {message[:60]}")
+            # Store in working memory for visible acknowledgment
+            if self.working_memory:
+                self.working_memory.add_correction(message[:100])
+            self._correction_just_detected = message[:100]
         except Exception:
             pass  # non-critical
 
@@ -3109,6 +3159,11 @@ Additional Examples for Background:
                 )
                 if episodes:
                     task += f"\n\n{episodes}"
+                    task += (
+                        "\nWhen you use info from past episodes above, briefly mention it naturally "
+                        "(e.g., 'Based on what worked last time...', 'I remember this came up before...'). "
+                        "Do NOT list episodes. Weave 1 reference naturally. Skip if not relevant."
+                    )
             except Exception as e:
                 logger.debug(f"Episodic recall skipped: {e}")
 
@@ -3154,6 +3209,10 @@ Additional Examples for Background:
                 )
                 if strategies:
                     task += f"\n\n{strategies}"
+                    task += (
+                        "\nIf you follow a proven strategy above, briefly note it "
+                        "(e.g., 'Using the approach that worked well before...'). One sentence max."
+                    )
             except Exception:
                 pass
 
@@ -3530,6 +3589,18 @@ SECURITY OVERRIDE:
         # Enforce token budget on brain context via Thalamus
         if brain_context:
             brain_context = self.thalamus.budget_brain_context(brain_context)
+            brain_context += (
+                "\n\nMEMORY USAGE RULE: When drawing on a specific preference, past conversation, "
+                "or known fact from context above, naturally reference it "
+                "('Since you prefer...', 'You mentioned...', 'I know you like...'). "
+                "Never fabricate — only cite what is actually in the context."
+            )
+
+        # Inject structured preference profile
+        if self.working_memory:
+            pref_summary = self.working_memory.get_preference_summary()
+            if pref_summary:
+                brain_context += f"\n\n{pref_summary}"
 
         # ── Working memory context (tone, unfinished items, calibration) ─
         wm_section = ""
@@ -3537,6 +3608,26 @@ SECURITY OVERRIDE:
             wm_ctx = self.working_memory.get_context()
             if wm_ctx:
                 wm_section = f"\n\n{wm_ctx}"
+
+            # Correction acknowledgment — tell LLM user just corrected it
+            if getattr(self, '_correction_just_detected', None):
+                wm_section += (
+                    "\n\nCORRECTION DETECTED: The user just corrected you. "
+                    "Acknowledge briefly ('Got it', 'Understood — adjusting') "
+                    "and deliver the corrected response. Do NOT apologize excessively."
+                )
+
+            # Session greeting — offer to continue open threads on return
+            if getattr(self, '_is_new_session', False):
+                thread_ctx = self.working_memory.session_context()
+                if thread_ctx:
+                    wm_section += (
+                        f"\n\n{thread_ctx}\n"
+                        "SESSION GREETING: The user returned after a break. "
+                        "If an open thread relates to their message, briefly mention it "
+                        "(e.g., 'Welcome back — we were working on X, want to continue?'). "
+                        "If their message is about something new, skip the greeting."
+                    )
 
         # ── Tone adaptation (shapes response style based on detected emotion) ─
         tone_section = ""
