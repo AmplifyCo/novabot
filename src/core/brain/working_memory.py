@@ -22,7 +22,6 @@ _DEFAULT = {
     "tone":               "neutral",       # neutral | urgent | stressed | relaxed | formal
     "energy":             "normal",        # low | normal | high
     "unfinished":         [],              # list of brief strings (max 5)
-    "momentum":           "",              # current topic thread (max 100 chars)
     "calibration":        "",              # user-issued behavioral directive ("be more concise")
     "session_count":      0,
     "last_active":        None,
@@ -84,11 +83,6 @@ class WorkingMemory:
         self._state["tone"] = detected_tone
         self._state["last_active"] = datetime.now().isoformat()
         self._state["session_count"] = self._state.get("session_count", 0) + 1
-
-        # Update momentum (current topic thread — last 100 chars of user message)
-        topic = user_message.strip()[:100]
-        if topic:
-            self._state["momentum"] = topic
 
         # Prune unfinished list (keep max 5 most recent)
         if len(self._state["unfinished"]) > 5:
@@ -436,7 +430,3 @@ class WorkingMemory:
     @property
     def calibration(self) -> str:
         return self._state.get("calibration", "")
-
-    @property
-    def momentum(self) -> str:
-        return self._state.get("momentum", "")
