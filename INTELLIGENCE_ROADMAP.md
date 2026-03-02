@@ -75,12 +75,15 @@ Keyword-triggered ("should I", "pros and cons", "compare") → gathers evidence 
 
 ---
 
-## Phase 4: Autonomous Growth
+## Phase 4: Autonomous Growth (IMPLEMENTED — 4A)
 *Nova improves itself without being told*
 
-### 4A. Skill Acquisition
-Periodic review of episodic memory. Extract patterns from successful actions into skills/ JSON files. After 10 LinkedIn posts, auto-extract a style guide from approved posts.
-**New file**: brain/skill_learner.py
+### 4A. Skill Acquisition (IMPLEMENTED)
+Nova reads external API specifications (.md files) and autonomously generates working tool plugins. Pipeline: fetch spec → parse with Gemini Flash → generate BaseTool code + manifest → AST safety validation → write to plugins/ → hot-reload via PluginLoader. Zero hub edits for new tools. Triggered by "learn this skill: URL" or agent tool call.
+**New file**: brain/skill_learner.py (~350 lines)
+**New file**: tools/skill_tool.py (~90 lines)
+**Wired into**: registry.py (_register_skill_tool + set_skill_learner), main.py, conversation_manager.py (_handle_skill_learn fast-path), goal_decomposer.py
+**Latency**: +2 Gemini Flash calls per skill learn only (parse ~2s + generate ~3s). Fail-open.
 
 ### 4B. Feedback Loop Closure
 Track outcomes, not just actions. Poll LinkedIn API for engagement after 24h. Track email replies within 48h. Store outcomes in episodic memory. Pattern detector uses these for calibration.

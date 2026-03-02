@@ -162,7 +162,7 @@ class GoalDecomposer:
         "bash", "file_operations", "web_search", "web_fetch", "browser",
         "email", "calendar", "x_tool", "reminder", "nova_task", "contacts",
         "linkedin", "send_whatsapp_message", "make_phone_call", "clock",
-        "polymarket", "memory_query",
+        "polymarket", "memory_query", "learn_skill",
     }
     _VALID_MODEL_TIERS = {"flash", "haiku", "sonnet", "opus"}
     _MAX_DESCRIPTION_LENGTH = 500  # Cap to prevent prompt injection via long descriptions

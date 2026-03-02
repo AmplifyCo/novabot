@@ -440,6 +440,16 @@ Models: Claude Opus/Sonnet/Haiku + SmolLM2 (local fallback)"""
             conversation_manager.self_assessor = self_assessor
             logger.info("🎯 SelfAssessor initialized (quality assessment + deliberation)")
 
+            # Skill Acquisition (4A) — learn new tools from .md API specs
+            from src.core.brain.skill_learner import SkillLearner
+            _gemini_for_skills = gemini_client if 'gemini_client' in locals() else None
+            skill_learner = SkillLearner(
+                gemini_client=_gemini_for_skills,
+                plugin_loader=agent.tools._plugin_loader,
+            )
+            agent.tools.set_skill_learner(skill_learner)
+            logger.info("🎓 SkillLearner initialized (learn new tools from .md specs)")
+
             # Restore timezone override from working memory (persists across restarts)
             if working_memory.timezone_override:
                 tz_override = working_memory.timezone_override

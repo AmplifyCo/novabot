@@ -88,6 +88,9 @@ class ToolRegistry:
         # ── Market Data Tools (always available, no auth) ───────────────────
         self._register_polymarket_tool()
 
+        # ── Skill Acquisition (Phase 4A) ─────────────────────────────────
+        self._register_skill_tool()
+
         # ── Plugin Tools (auto-discovered from plugins/ directory) ─────────
         # Drop a folder into plugins/ with tool.py + manifest.json → auto-loaded.
         # Zero hub edits needed for new tools.
@@ -544,6 +547,23 @@ class ToolRegistry:
             logger.info("🧠 MemoryQuery tool registered")
         except Exception as e:
             logger.warning(f"Failed to register MemoryQuery tool: {e}")
+
+    def _register_skill_tool(self):
+        """Register SkillTool for learning new API integrations (Phase 4A)."""
+        try:
+            from .skill_tool import SkillTool
+            self._skill_tool = SkillTool()
+            self._skill_tool._registry = self  # for hot-reload passthrough
+            self.register(self._skill_tool)
+            logger.info("🎓 SkillTool registered")
+        except Exception as e:
+            logger.warning(f"Failed to register SkillTool: {e}")
+
+    def set_skill_learner(self, skill_learner):
+        """Inject SkillLearner into SkillTool after initialization (Phase 4A)."""
+        if hasattr(self, '_skill_tool') and self._skill_tool:
+            self._skill_tool.skill_learner = skill_learner
+            logger.info("🎓 SkillTool connected to SkillLearner")
 
     def get_plugin_metadata(self) -> dict:
         """Return metadata for all loaded plugins.

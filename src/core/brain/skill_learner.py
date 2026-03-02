@@ -1,0 +1,642 @@
+"""Skill Learner — acquires new tool capabilities from .md API spec files.
+
+Phase 4A: Skill Acquisition.
+
+Takes a URL to a markdown API specification, parses it with Gemini Flash,
+generates a BaseTool plugin (tool.py + manifest.json), validates the code
+for safety, and writes it to the plugins directory for hot-reload.
+
+Pipeline: fetch → parse → generate → validate → write → reload → metadata.
+Output: plugins/{skill_name}/tool.py + manifest.json (hub-spoke model).
+"""
+
+import ast
+import asyncio
+import json
+import logging
+import os
+import re
+import tempfile
+import time
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import urlparse
+
+import aiohttp
+
+logger = logging.getLogger(__name__)
+
+# Safety: max spec file size
+_MAX_SPEC_SIZE = 512 * 1024  # 512 KB
+
+# Safety: banned AST constructs in generated code
+_BANNED_CALLS = {
+    "eval", "exec", "compile", "execfile",
+    "__import__", "getattr", "setattr", "delattr",
+    "globals", "locals", "vars",
+}
+_BANNED_MODULES = {
+    "subprocess", "ctypes", "importlib", "shutil",
+}
+_BANNED_STRINGS = [
+    "__import__", "os.system", "os.popen", "subprocess",
+    "exec(", "eval(", "compile(",
+]
+
+# Where plugins live
+_PLUGINS_DIR = Path(__file__).resolve().parents[1] / "tools" / "plugins"
+
+# Where skill metadata is stored
+_SKILLS_DATA_DIR = Path("data/skills")
+
+# ── LLM Prompt Templates ────────────────────────────────────────────────
+
+_PARSE_SPEC_PROMPT = """\
+You are an API spec analyzer. Extract structured metadata from this markdown API specification.
+Return ONLY valid JSON (no markdown fences, no explanation). The JSON must have these fields:
+
+{{
+  "name": "lowercase_snake_case name for the API (e.g. 'moltbook', 'stripe')",
+  "description": "One-line description of what this API does",
+  "base_url": "The base URL for all API calls",
+  "auth_method": "bearer|api_key_header|api_key_query|none",
+  "auth_header": "Header name (e.g. 'Authorization')",
+  "auth_prefix": "Header value prefix (e.g. 'Bearer ')",
+  "env_var_name": "Suggested env var name for the API key (e.g. 'MOLTBOOK_API_KEY')",
+  "category": "social|finance|productivity|communication|research|developer|other",
+  "version": "API version string",
+  "rate_limits": {{"reads_per_min": 60, "writes_per_min": 30, "notes": "extra rules"}},
+  "error_format": "Description of error response shape",
+  "operations": [
+    {{
+      "name": "operation_name (snake_case, verb-noun)",
+      "description": "What the user would say to trigger this",
+      "method": "GET|POST|PUT|PATCH|DELETE",
+      "path": "/endpoint/path",
+      "params": {{"param_name": "type and description"}},
+      "body_fields": {{"field_name": "type and description"}},
+      "risk_level": "read|write|irreversible"
+    }}
+  ]
+}}
+
+RISK LEVEL RULES:
+- "read": GET requests — listing, searching, fetching data
+- "write": Creating, updating local data, subscribing, following
+- "irreversible": Posting public content, sending messages, deleting data
+
+Group related endpoints into 10-15 logical operations a user would invoke.
+For example, GET /posts + GET /posts/{{id}} → "get_posts" operation.
+
+API SPEC:
+{spec_content}"""
+
+_GENERATE_PLUGIN_PROMPT = """\
+Generate a Python tool plugin for the Nova bot system.
+
+CONSTRAINTS (violation = rejection):
+1. NEVER use eval, exec, subprocess, __import__, os.system, compile, importlib
+2. ONLY import from: aiohttp, json, logging, typing, re, time, urllib.parse
+3. MUST start with these exact imports:
+   from src.core.tools.base import BaseTool
+   from src.core.types import ToolResult
+4. MUST inherit from BaseTool
+5. MUST return ToolResult(success=bool, output=str, error=str, metadata=dict)
+6. Constructor takes api_key as kwarg (env var injected via manifest)
+7. execute() dispatches on 'operation' parameter to private async methods
+8. Shared async _request(method, path, **kw) helper handles auth headers + error parsing
+9. Only 'operation' is required in to_anthropic_tool input_schema
+
+ARCHITECTURE PATTERN (follow exactly):
+- name = "{tool_name}"
+- description includes what operations are available
+- parameters dict with operation (enum of available ops) + other params
+- execute(**kwargs) dispatches: if operation == "x": return await self._x(...)
+- _request(method, path) handles: base URL, auth header, JSON parsing, rate limit errors
+
+API SPECIFICATION:
+{spec_json}
+
+Generate TWO outputs separated by the exact marker "---MANIFEST---":
+
+1. Complete tool.py Python code (no markdown fences)
+2. Complete manifest.json content (no markdown fences)
+
+The manifest must follow this schema:
+{{
+  "name": "{tool_name}",
+  "version": "1.0",
+  "description": "...",
+  "class_name": "TheClassName",
+  "module_file": "tool.py",
+  "risk_map": {{"operation_name": "read|write|irreversible", "_default": "write"}},
+  "env_vars": ["{env_var}"],
+  "constructor_args": {{"api_key": "{env_var}"}},
+  "safe_readonly": false,
+  "persona": "researcher|communicator|content_writer|scheduler|operator",
+  "dependencies": ["aiohttp"]
+}}"""
+
+
+# ── Data classes ─────────────────────────────────────────────────────────
+
+@dataclass
+class ParsedSpec:
+    """Structured representation of a parsed API spec."""
+
+    name: str
+    description: str
+    base_url: str
+    auth_method: str = "bearer"
+    auth_header: str = "Authorization"
+    auth_prefix: str = "Bearer "
+    env_var_name: str = ""
+    category: str = "other"
+    version: str = "1.0"
+    rate_limits: Dict[str, Any] = field(default_factory=dict)
+    error_format: str = ""
+    operations: List[Dict[str, Any]] = field(default_factory=list)
+    risk_map: Dict[str, str] = field(default_factory=dict)
+
+
+@dataclass
+class SkillMetadata:
+    """Provenance tracking for a learned skill."""
+
+    name: str
+    source_url: str
+    learned_at: str
+    spec_version: str
+    plugin_dir: str
+    status: str  # "active" | "pending_env" | "validation_failed" | "reload_failed"
+    env_vars_needed: List[str]
+    description: str
+
+
+# ── Main class ───────────────────────────────────────────────────────────
+
+class SkillLearner:
+    """Acquires new tool capabilities from markdown API specification files.
+
+    Pipeline: fetch → parse → generate → validate → write → reload.
+    Output: a plugin folder (tool.py + manifest.json) in plugins/.
+    Leverages existing PluginLoader for zero-hub-edit integration.
+    """
+
+    def __init__(self, gemini_client=None, plugin_loader=None):
+        """
+        Args:
+            gemini_client: GeminiClient for spec parsing + code generation.
+            plugin_loader: PluginLoader instance for hot-reload after generation.
+        """
+        self.llm = gemini_client
+        self.plugin_loader = plugin_loader
+        self._plugins_dir = _PLUGINS_DIR
+        self._learned_skills: Dict[str, SkillMetadata] = {}
+        self._load_skill_metadata()
+
+    # ── Public API ───────────────────────────────────────────────────────
+
+    async def learn_from_url(self, url: str) -> Tuple[bool, str]:
+        """Learn a new skill from a .md spec URL.
+
+        Full pipeline: fetch → parse → generate → validate → write → reload.
+
+        Args:
+            url: HTTPS URL to a .md API spec file
+
+        Returns:
+            (success, human-readable message)
+        """
+        if not self.llm or not getattr(self.llm, "enabled", False):
+            return False, "Skill learning requires Gemini. Not available right now."
+
+        # Step 1: Fetch
+        ok, content = await self._fetch_spec(url)
+        if not ok:
+            return False, f"Could not fetch spec: {content}"
+        logger.info(f"SkillLearner: fetched spec from {url} ({len(content)} chars)")
+
+        # Step 2: Parse
+        ok, parsed = await self._parse_spec(content)
+        if not ok:
+            return False, f"Could not parse spec: {parsed}"
+        logger.info(f"SkillLearner: parsed spec → {parsed.name} ({len(parsed.operations)} operations)")
+
+        # Step 3: Generate tool.py + manifest.json
+        ok, generated = await self._generate_plugin(parsed)
+        if not ok:
+            return False, f"Code generation failed: {generated}"
+
+        tool_code = generated["tool_code"]
+        manifest = generated["manifest"]
+        logger.info(f"SkillLearner: generated plugin code ({len(tool_code)} chars)")
+
+        # Step 4: Validate
+        ok, reason = self._validate_code(tool_code)
+        if not ok:
+            self._store_metadata(SkillMetadata(
+                name=parsed.name, source_url=url,
+                learned_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                spec_version=parsed.version,
+                plugin_dir=str(self._plugins_dir / parsed.name),
+                status="validation_failed",
+                env_vars_needed=manifest.get("env_vars", []),
+                description=parsed.description,
+            ))
+            return False, f"Generated code failed safety check: {reason}"
+        logger.info("SkillLearner: code passed safety validation")
+
+        # Step 5: Write plugin
+        ok, msg = self._write_plugin(parsed.name, tool_code, manifest)
+        if not ok:
+            return False, msg
+
+        # Step 6: Check env vars
+        env_vars = manifest.get("env_vars", [])
+        missing_env = [v for v in env_vars if not os.getenv(v)]
+        if missing_env:
+            status = "pending_env"
+            env_msg = (
+                "\n\nTo activate it, set these environment variables:\n"
+                + "\n".join(f"  - {v}" for v in missing_env)
+                + "\n\nThen say 'reload plugins'."
+            )
+        else:
+            status = "active"
+            env_msg = ""
+
+        # Step 7: Hot-reload if env vars present
+        reload_msg = ""
+        if status == "active" and self.plugin_loader:
+            try:
+                ok, reload_msg = self.plugin_loader.reload_plugin(
+                    parsed.name, self._get_registry()
+                )
+                if not ok:
+                    status = "reload_failed"
+                    reload_msg = f"\nPlugin saved but reload failed: {reload_msg}"
+                else:
+                    logger.info(f"SkillLearner: plugin {parsed.name} hot-reloaded successfully")
+            except Exception as e:
+                status = "reload_failed"
+                reload_msg = f"\nPlugin saved but reload failed: {e}"
+
+        # Step 8: Store metadata
+        metadata = SkillMetadata(
+            name=parsed.name,
+            source_url=url,
+            learned_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            spec_version=parsed.version,
+            plugin_dir=str(self._plugins_dir / parsed.name),
+            status=status,
+            env_vars_needed=env_vars,
+            description=parsed.description,
+        )
+        self._store_metadata(metadata)
+
+        # Build response
+        if status == "active":
+            return True, (
+                f"Learned the {parsed.name} skill! ({parsed.description})\n\n"
+                f"It's already active — try asking me to use {parsed.name}."
+            )
+        elif status == "pending_env":
+            return True, (
+                f"Learned the {parsed.name} skill and saved the plugin. "
+                f"({parsed.description}){env_msg}"
+            )
+        else:
+            return False, (
+                f"Skill {parsed.name} saved but failed to activate.{reload_msg}"
+            )
+
+    def get_learned_skills(self) -> List[SkillMetadata]:
+        """Return metadata for all learned skills."""
+        return list(self._learned_skills.values())
+
+    def get_skill_status(self, name: str) -> Optional[SkillMetadata]:
+        """Get status of a specific learned skill."""
+        return self._learned_skills.get(name.strip().lower())
+
+    # ── Pipeline Steps ───────────────────────────────────────────────────
+
+    async def _fetch_spec(self, url: str) -> Tuple[bool, str]:
+        """Fetch a .md spec from URL. HTTPS only. Max 512KB."""
+        parsed_url = urlparse(url)
+        if parsed_url.scheme != "https":
+            return False, "Only HTTPS URLs are supported for security"
+        if not parsed_url.path.endswith((".md", ".markdown", ".json")):
+            return False, "URL must point to a .md or .json file"
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    url,
+                    timeout=aiohttp.ClientTimeout(total=30),
+                    headers={"User-Agent": "Nova-SkillLearner/1.0"},
+                ) as resp:
+                    if resp.status != 200:
+                        return False, f"HTTP {resp.status}"
+                    content = await resp.text()
+                    if len(content) > _MAX_SPEC_SIZE:
+                        return False, f"Spec too large ({len(content)} bytes, max {_MAX_SPEC_SIZE})"
+                    return True, content
+        except aiohttp.ClientError as e:
+            return False, f"Network error: {e}"
+        except Exception as e:
+            return False, f"Fetch failed: {e}"
+
+    async def _parse_spec(self, markdown: str) -> Tuple[bool, Any]:
+        """Parse markdown spec into ParsedSpec using Gemini Flash.
+
+        Returns:
+            (success, ParsedSpec or error_string)
+        """
+        prompt = _PARSE_SPEC_PROMPT.format(spec_content=markdown[:8000])
+
+        try:
+            resp = await asyncio.wait_for(
+                self.llm.generate(
+                    prompt=prompt,
+                    system_prompt="You are an API spec analyzer. Output only valid JSON.",
+                    max_tokens=2000,
+                ),
+                timeout=15.0,
+            )
+            text = ""
+            if isinstance(resp, str):
+                text = resp.strip()
+            elif isinstance(resp, dict):
+                text = resp.get("text", "").strip()
+
+            # Strip markdown fences
+            text = text.replace("```json", "").replace("```", "").strip()
+
+            data = json.loads(text)
+            if not isinstance(data, dict) or "name" not in data:
+                return False, "LLM returned invalid spec structure"
+
+            # Build risk_map from operations
+            risk_map = {"_default": "write"}
+            for op in data.get("operations", []):
+                if "name" in op and "risk_level" in op:
+                    risk_map[op["name"]] = op["risk_level"]
+
+            spec = ParsedSpec(
+                name=data["name"].lower().replace("-", "_").replace(" ", "_"),
+                description=data.get("description", ""),
+                base_url=data.get("base_url", ""),
+                auth_method=data.get("auth_method", "bearer"),
+                auth_header=data.get("auth_header", "Authorization"),
+                auth_prefix=data.get("auth_prefix", "Bearer "),
+                env_var_name=data.get("env_var_name", f"{data['name'].upper()}_API_KEY"),
+                category=data.get("category", "other"),
+                version=data.get("version", "1.0"),
+                rate_limits=data.get("rate_limits", {}),
+                error_format=data.get("error_format", ""),
+                operations=data.get("operations", []),
+                risk_map=risk_map,
+            )
+            return True, spec
+
+        except asyncio.TimeoutError:
+            return False, "Spec parsing timed out"
+        except json.JSONDecodeError as e:
+            return False, f"LLM returned invalid JSON: {e}"
+        except Exception as e:
+            return False, f"Spec parsing failed: {e}"
+
+    async def _generate_plugin(self, spec: ParsedSpec) -> Tuple[bool, Any]:
+        """Generate tool.py + manifest.json from ParsedSpec using Gemini Flash.
+
+        Returns:
+            (success, {"tool_code": str, "manifest": dict} or error_string)
+        """
+        spec_json = json.dumps({
+            "name": spec.name,
+            "description": spec.description,
+            "base_url": spec.base_url,
+            "auth_method": spec.auth_method,
+            "auth_header": spec.auth_header,
+            "auth_prefix": spec.auth_prefix,
+            "env_var_name": spec.env_var_name,
+            "operations": spec.operations[:20],  # cap for token safety
+            "rate_limits": spec.rate_limits,
+            "error_format": spec.error_format,
+        }, indent=2)
+
+        prompt = _GENERATE_PLUGIN_PROMPT.format(
+            tool_name=spec.name,
+            env_var=spec.env_var_name,
+            spec_json=spec_json,
+        )
+
+        try:
+            resp = await asyncio.wait_for(
+                self.llm.generate(
+                    prompt=prompt,
+                    system_prompt=(
+                        "You are a Python code generator for the Nova bot plugin system. "
+                        "Output only code and JSON, no explanations."
+                    ),
+                    max_tokens=4000,
+                ),
+                timeout=30.0,
+            )
+            text = ""
+            if isinstance(resp, str):
+                text = resp.strip()
+            elif isinstance(resp, dict):
+                text = resp.get("text", "").strip()
+
+            # Split on manifest marker
+            if "---MANIFEST---" not in text:
+                return False, "LLM output missing ---MANIFEST--- separator"
+
+            parts = text.split("---MANIFEST---", 1)
+            tool_code = parts[0].strip()
+            manifest_text = parts[1].strip()
+
+            # Clean up markdown fences from both parts
+            tool_code = re.sub(r'^```(?:python)?\s*\n?', '', tool_code)
+            tool_code = re.sub(r'\n?```\s*$', '', tool_code)
+            manifest_text = re.sub(r'^```(?:json)?\s*\n?', '', manifest_text)
+            manifest_text = re.sub(r'\n?```\s*$', '', manifest_text)
+
+            if len(tool_code) < 100:
+                return False, "Generated tool code too short"
+
+            # Parse manifest JSON
+            try:
+                manifest = json.loads(manifest_text)
+            except json.JSONDecodeError as e:
+                # Fallback: build manifest from spec
+                manifest = self._build_fallback_manifest(spec)
+
+            # Ensure manifest has required fields
+            manifest.setdefault("name", spec.name)
+            manifest.setdefault("class_name", f"{spec.name.title().replace('_', '')}Tool")
+            manifest.setdefault("module_file", "tool.py")
+            manifest.setdefault("risk_map", spec.risk_map)
+            manifest.setdefault("env_vars", [spec.env_var_name] if spec.env_var_name else [])
+            manifest.setdefault("constructor_args", {"api_key": spec.env_var_name} if spec.env_var_name else {})
+            manifest.setdefault("safe_readonly", False)
+            manifest.setdefault("dependencies", ["aiohttp"])
+
+            return True, {"tool_code": tool_code, "manifest": manifest}
+
+        except asyncio.TimeoutError:
+            return False, "Code generation timed out"
+        except Exception as e:
+            return False, f"Code generation failed: {e}"
+
+    def _validate_code(self, code: str) -> Tuple[bool, str]:
+        """AST-level safety validation of generated Python code.
+
+        Rejects code containing eval, exec, subprocess, __import__,
+        os.system, and other dangerous constructs.
+
+        Returns:
+            (safe, reason)
+        """
+        # Step 1: Parse AST
+        try:
+            tree = ast.parse(code)
+        except SyntaxError as e:
+            return False, f"Syntax error in generated code: {e}"
+
+        # Step 2: Walk AST for banned constructs
+        for node in ast.walk(tree):
+            # Check function calls
+            if isinstance(node, ast.Call):
+                func = node.func
+                if isinstance(func, ast.Name) and func.id in _BANNED_CALLS:
+                    return False, f"Banned function call: {func.id}()"
+                if isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name):
+                    full = f"{func.value.id}.{func.attr}"
+                    if func.value.id in _BANNED_MODULES:
+                        return False, f"Banned module call: {full}()"
+                    if full in ("os.system", "os.popen", "os.exec"):
+                        return False, f"Banned call: {full}()"
+
+            # Check imports
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    mod = alias.name.split(".")[0]
+                    if mod in _BANNED_MODULES:
+                        return False, f"Banned import: {alias.name}"
+
+            if isinstance(node, ast.ImportFrom):
+                if node.module:
+                    mod = node.module.split(".")[0]
+                    if mod in _BANNED_MODULES:
+                        return False, f"Banned import from: {node.module}"
+
+        # Step 3: String-level backup scan
+        code_lower = code.lower()
+        for pattern in _BANNED_STRINGS:
+            if pattern.lower() in code_lower:
+                # Allow "from src.core.tools.base import BaseTool" etc.
+                if pattern == "subprocess" and "subprocess" not in code:
+                    continue
+                return False, f"Banned pattern in code: {pattern}"
+
+        return True, "Code passes safety validation"
+
+    def _write_plugin(
+        self, name: str, tool_code: str, manifest: dict
+    ) -> Tuple[bool, str]:
+        """Write generated tool.py + manifest.json to plugins/{name}/."""
+        plugin_dir = self._plugins_dir / name
+        plugin_dir.mkdir(parents=True, exist_ok=True)
+
+        try:
+            tool_path = plugin_dir / "tool.py"
+            tool_path.write_text(tool_code, encoding="utf-8")
+
+            manifest_path = plugin_dir / "manifest.json"
+            manifest_path.write_text(
+                json.dumps(manifest, indent=4, default=str), encoding="utf-8"
+            )
+
+            logger.info(f"SkillLearner: plugin written to {plugin_dir}")
+            return True, f"Plugin written to {plugin_dir}"
+        except Exception as e:
+            return False, f"Failed to write plugin: {e}"
+
+    def _get_registry(self):
+        """Get the ToolRegistry that owns this PluginLoader.
+
+        Walks back from plugin_loader to find its parent registry.
+        Returns None if not found (reload will be skipped).
+        """
+        # The registry stores _plugin_loader; we need the reverse reference.
+        # Since we can't easily do this, we pass registry through reload_plugin.
+        # The caller (learn_from_url) gets registry from SkillTool.
+        # For now, return None — the SkillTool overrides this.
+        return None
+
+    # ── Metadata persistence ─────────────────────────────────────────────
+
+    def _store_metadata(self, metadata: SkillMetadata):
+        """Persist skill provenance to data/skills/{name}.json."""
+        _SKILLS_DATA_DIR.mkdir(parents=True, exist_ok=True)
+        path = _SKILLS_DATA_DIR / f"{metadata.name}.json"
+        try:
+            path.write_text(json.dumps({
+                "name": metadata.name,
+                "source_url": metadata.source_url,
+                "learned_at": metadata.learned_at,
+                "spec_version": metadata.spec_version,
+                "plugin_dir": metadata.plugin_dir,
+                "status": metadata.status,
+                "env_vars_needed": metadata.env_vars_needed,
+                "description": metadata.description,
+            }, indent=2))
+        except Exception as e:
+            logger.warning(f"SkillLearner: failed to store metadata: {e}")
+        self._learned_skills[metadata.name] = metadata
+
+    def _load_skill_metadata(self):
+        """Load previously learned skills from data/skills/."""
+        if not _SKILLS_DATA_DIR.exists():
+            return
+        for f in _SKILLS_DATA_DIR.glob("*.json"):
+            try:
+                data = json.loads(f.read_text())
+                self._learned_skills[data["name"]] = SkillMetadata(**data)
+            except Exception:
+                pass
+
+    # ── Helpers ──────────────────────────────────────────────────────────
+
+    def _build_fallback_manifest(self, spec: ParsedSpec) -> dict:
+        """Build a manifest dict from ParsedSpec when LLM manifest fails."""
+        class_name = "".join(w.title() for w in spec.name.split("_")) + "Tool"
+        return {
+            "name": spec.name,
+            "version": "1.0",
+            "description": spec.description,
+            "class_name": class_name,
+            "module_file": "tool.py",
+            "risk_map": spec.risk_map,
+            "env_vars": [spec.env_var_name] if spec.env_var_name else [],
+            "constructor_args": {"api_key": spec.env_var_name} if spec.env_var_name else {},
+            "safe_readonly": False,
+            "persona": self._infer_persona(spec.category),
+            "dependencies": ["aiohttp"],
+        }
+
+    @staticmethod
+    def _infer_persona(category: str) -> str:
+        """Map API category to Nova persona."""
+        return {
+            "social": "communicator",
+            "communication": "communicator",
+            "finance": "researcher",
+            "research": "researcher",
+            "productivity": "operator",
+            "developer": "operator",
+        }.get(category, "operator")

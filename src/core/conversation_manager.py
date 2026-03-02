@@ -621,6 +621,12 @@ class ConversationManager:
                 logger.info(f"[{trace_id}] Plugin reload handled")
                 return reload_response
 
+            # ── Skill learning: "learn this skill: URL" ──────────────────
+            skill_response = await self._handle_skill_learn(message)
+            if skill_response:
+                logger.info(f"[{trace_id}] Skill learn command handled")
+                return skill_response
+
             # ── Quick task status check: "did the LinkedIn post go through?" ──
             status_response = self._handle_task_status_query(message)
             if status_response:
@@ -2451,6 +2457,36 @@ Additional Examples for Background:
         logger.info("Admin command: reloading plugins...")
         result = await self.agent.tools.reload_plugins()
         return f"Done. {result}"
+
+    # ── Phase 4A: Skill Learning ─────────────────────────────────────────
+
+    _SKILL_LEARN_PATTERN = re.compile(
+        r'(?:learn\s+(?:this\s+)?(?:skill|api)|/learn)\s*:?\s*(https://\S+\.(?:md|json))\b',
+        re.IGNORECASE,
+    )
+
+    async def _handle_skill_learn(self, message: str) -> Optional[str]:
+        """Fast-path: detect 'learn skill URL' and invoke SkillLearner directly.
+
+        Detects messages like:
+        - "learn this skill: https://example.com/skill.md"
+        - "/learn https://example.com/skill.md"
+        - "learn this API: https://example.com/spec.md"
+
+        Returns response string if handled, None otherwise.
+        """
+        match = self._SKILL_LEARN_PATTERN.search(message)
+        if not match:
+            return None
+
+        url = match.group(1)
+        skill_tool = self.agent.tools.get_tool("learn_skill") if hasattr(self.agent, 'tools') else None
+        if not skill_tool or not getattr(skill_tool, 'skill_learner', None):
+            return "Skill learning is not available."
+
+        logger.info(f"Skill learn command: {url}")
+        success, msg = await skill_tool.skill_learner.learn_from_url(url)
+        return msg
 
     # Generic words that should fall through to cancel-all instead of keyword search
     _GENERIC_TASK_WORDS = {"all", "every", "everything", "current", "background", "that", "this", "my", "the"}
