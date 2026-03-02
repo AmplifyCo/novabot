@@ -566,6 +566,9 @@ Models: Claude Opus/Sonnet/Haiku + SmolLM2 (local fallback)"""
             # Wire CriticAgent into ConversationManager for inline content reflection
             conversation_manager.critic = _critic
 
+            # Wire TaskRunner into ConversationManager for /stop kill switch
+            conversation_manager.task_runner = _task_runner
+
             # Wire template_library into goal_decomposer for reuse on future tasks
             goal_decomposer.template_library = _template_library
             asyncio.create_task(_task_runner.start())

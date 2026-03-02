@@ -165,6 +165,8 @@ class ConversationManager:
 
         # Task queue for background autonomous execution (injected by main.py)
         self.task_queue = None
+        self.task_runner = None  # TaskRunner reference for /stop kill switch (injected by main.py)
+        self._paused = False     # Global pause flag — /stop sets True, /resume clears
 
         # ── AGI/Human-like capabilities (injected by main.py) ────────────────
         self.working_memory: Optional[WorkingMemory] = None   # session state, tone, unfinished items
@@ -592,6 +594,18 @@ class ConversationManager:
 
             # Use sanitized message for processing
             message = sanitized_message
+
+            # ── KILL SWITCH: /stop and /resume (highest priority) ─────────
+            stop_response = self._handle_stop_command(message)
+            if stop_response:
+                logger.info(f"[{trace_id}] Kill switch handled")
+                return stop_response
+
+            # If paused, only allow /resume and /devops — block everything else
+            if self._paused:
+                msg_lower = message.lower().strip()
+                if not msg_lower.startswith("/devops") and not msg_lower.startswith("/resume"):
+                    return "All operations are paused. Say /resume to continue."
 
             # ── Tone detection (zero-latency, rule-based) ─────────────────
             self._current_tone_signal = _tone_analyzer.analyze(message)
@@ -2487,6 +2501,72 @@ Additional Examples for Background:
         logger.info(f"Skill learn command: {url}")
         success, msg = await skill_tool.skill_learner.learn_from_url(url)
         return msg
+
+    # ── Kill Switch: /stop and /resume ──────────────────────────────────────
+
+    def _handle_stop_command(self, message: str) -> Optional[str]:
+        """Handle /stop and /resume kill-switch commands.
+
+        /stop  — pause ALL operations: cancel queued tasks, stop task runner.
+        /resume — unpause: restart task runner, accept messages again.
+
+        Returns response string if handled, None otherwise.
+        """
+        msg_lower = message.lower().strip()
+
+        # ── /stop ─────────────────────────────────────────────────────
+        if msg_lower in ("/stop", "/stop!") or msg_lower.startswith("/stop "):
+            if self._paused:
+                return "Already paused. Say /resume to continue."
+
+            self._paused = True
+            cancelled = 0
+
+            # 1. Cancel all queued/running tasks in TaskQueue
+            if self.task_queue:
+                try:
+                    tasks = self.task_queue.get_active_tasks()
+                    for t in tasks:
+                        self.task_queue.cancel(t.id)
+                        cancelled += 1
+                except Exception as e:
+                    logger.warning(f"Error cancelling tasks during /stop: {e}")
+
+            # 2. Stop TaskRunner background loop
+            if self.task_runner:
+                try:
+                    self.task_runner.stop()
+                    logger.info("TaskRunner stopped by /stop kill switch")
+                except Exception as e:
+                    logger.warning(f"Error stopping TaskRunner: {e}")
+
+            logger.info(f"/stop kill switch activated — cancelled {cancelled} task(s)")
+
+            parts = ["All operations paused."]
+            if cancelled:
+                parts.append(f"Cancelled {cancelled} background task(s).")
+            parts.append("Say /resume when you're ready to continue.")
+            return " ".join(parts)
+
+        # ── /resume ───────────────────────────────────────────────────
+        if msg_lower in ("/resume",) or msg_lower.startswith("/resume "):
+            if not self._paused:
+                return "Not paused — everything is running normally."
+
+            self._paused = False
+
+            # Restart TaskRunner background loop
+            if self.task_runner:
+                try:
+                    asyncio.create_task(self.task_runner.start())
+                    logger.info("TaskRunner restarted by /resume")
+                except Exception as e:
+                    logger.warning(f"Error restarting TaskRunner: {e}")
+
+            logger.info("/resume — operations resumed")
+            return "Resumed — all operations are back online."
+
+        return None
 
     # Generic words that should fall through to cancel-all instead of keyword search
     _GENERIC_TASK_WORDS = {"all", "every", "everything", "current", "background", "that", "this", "my", "the"}
