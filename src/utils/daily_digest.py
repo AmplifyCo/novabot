@@ -193,7 +193,11 @@ class DailyDigest:
         return stats
 
     def _get_capability_summary(self) -> Optional[str]:
-        """Get capability backlog summary from the interceptor's backlog file."""
+        """Get capability backlog summary from the interceptor's backlog file.
+
+        Auto-purges entries older than 3 days (completed/failed) to keep
+        the backlog relevant and the daily report clean.
+        """
         backlog_file = self.data_dir / "capability_backlog.json"
         if not backlog_file.exists():
             return None
@@ -202,6 +206,37 @@ class DailyDigest:
             with open(backlog_file, 'r') as f:
                 backlog = json.load(f)
 
+            if not backlog:
+                return None
+
+            # ── Auto-purge stale entries (older than 3 days) ──────────
+            cutoff = datetime.now() - timedelta(days=3)
+            original_len = len(backlog)
+            fresh = []
+            for item in backlog:
+                detected = item.get("detected_at", "")
+                status = item.get("status", "")
+                # Keep pending/fixing items regardless of age
+                if status in ("pending", "fixing", "fix_pending"):
+                    fresh.append(item)
+                    continue
+                # Purge old fixed/failed entries
+                if detected:
+                    try:
+                        item_time = datetime.fromisoformat(detected)
+                        if item_time < cutoff:
+                            continue  # skip — stale
+                    except (ValueError, TypeError):
+                        pass
+                fresh.append(item)
+
+            if len(fresh) < original_len:
+                purged = original_len - len(fresh)
+                with open(backlog_file, 'w') as f:
+                    json.dump(fresh, f, indent=2)
+                logger.info(f"Purged {purged} stale capability backlog entries (older than 3 days)")
+
+            backlog = fresh
             if not backlog:
                 return None
 
