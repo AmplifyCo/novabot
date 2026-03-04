@@ -1724,8 +1724,25 @@ RULES:
             if circadian_ctx:
                 system_prompt += f"\n\n{circadian_ctx}"
 
-            # Primary: Gemini Flash via LiteLLM
+            # Primary: Claude Haiku via LiteLLM (better instruction-following than Flash)
             if self.gemini_client and self.gemini_client.enabled:
+                try:
+                    response = await self.gemini_client.create_message(
+                        model="anthropic/claude-haiku-4-5",
+                        messages=[{"role": "user", "content": message}],
+                        system=system_prompt,
+                        max_tokens=300
+                    )
+                    text = ""
+                    for block in response.content:
+                        if hasattr(block, 'text'):
+                            text += block.text
+                    if text.strip():
+                        return text.strip()
+                except Exception as haiku_err:
+                    logger.warning(f"Chat Haiku failed ({str(haiku_err)[:60]}), trying Gemini Flash...")
+
+                # Fallback: Gemini Flash via LiteLLM
                 try:
                     response = await self.gemini_client.create_message(
                         model="gemini/gemini-2.0-flash",
@@ -1739,30 +1756,13 @@ RULES:
                             text += block.text
                     if text.strip():
                         return text.strip()
-                except Exception as gemini_err:
-                    logger.warning(f"Chat Gemini failed ({str(gemini_err)[:60]}), trying Claude...")
-
-                # Fallback: Claude Sonnet via LiteLLM
-                try:
-                    response = await self.gemini_client.create_message(
-                        model="anthropic/claude-sonnet-4-5",
-                        messages=[{"role": "user", "content": message}],
-                        system=system_prompt,
-                        max_tokens=300
-                    )
-                    text = ""
-                    for block in response.content:
-                        if hasattr(block, 'text'):
-                            text += block.text
-                    if text.strip():
-                        return text.strip()
-                except Exception as claude_err:
-                    logger.error(f"Chat Claude also failed: {claude_err}")
+                except Exception as flash_err:
+                    logger.error(f"Chat Gemini Flash also failed: {flash_err}")
             else:
                 # No LiteLLM — direct Anthropic call
                 try:
                     response = await self.anthropic_client.create_message(
-                        model="claude-sonnet-4-5",
+                        model="claude-haiku-4-5",
                         max_tokens=300,
                         system=system_prompt,
                         messages=[{"role": "user", "content": message}]
