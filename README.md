@@ -1,8 +1,8 @@
 <div align="center">
 
-<a href="https://github.com/AmplifyCo/novabot">
-  <img src="https://readme-typing-svg.demolab.com?font=Fira+Code&weight=600&size=28&duration=3000&pause=1000&color=8B5CF6&center=true&vCenter=true&multiline=true&width=700&height=80&lines=Nova+%F0%9F%A6%89+%E2%80%94+the+Auto+Bot;Your+Non-Human+Assistant+That+Actually+Gets+Things+Done" alt="Nova — the Auto Bot" />
-</a>
+# Nova 🦉 — the Auto Bot
+
+### Your Non-Human Assistant That Actually Gets Things Done
 
 **Nova handles your emails, calls, social posts, and research while you focus on building.**
 
