@@ -1432,27 +1432,60 @@ class ConversationManager:
         elif action == "conversation":
             msg_lower = message.strip().lower()
 
-            # Only use tool-less _chat() for trivial greetings/acknowledgments
-            # "yes"/"no" etc. are included here because by this point,
-            # _handle_pending_action_confirmation() has already run (above).
-            # If there were pending actions, it would have returned early.
-            # Reaching here means no pending actions → treat as trivial.
-            trivial_messages = {
+            # Greetings/filler — always safe to route to _chat()
+            _TRIVIAL_GREETINGS = {
                 "hi", "hey", "hello", "yo", "sup",
                 "ok", "okay", "thanks", "thank you", "thx",
                 "bye", "good", "nice", "cool", "great",
-                "yes", "no", "yeah", "nah", "yep", "nope", "sure",
                 "lol", "haha", "hmm",
                 "good morning", "good night", "gm", "gn",
             }
+            # Short affirmatives/negatives — only trivial if Nova did NOT
+            # just ask a question.  Otherwise "yes" is a continuation.
+            _SHORT_REPLIES = {
+                "yes", "no", "yeah", "nah", "yep", "nope", "sure",
+            }
 
-            if msg_lower in trivial_messages:
+            uid = self._current_user_id or "unknown"
+            last_resp = self._last_bot_responses.get(uid, "")
+
+            if msg_lower in _TRIVIAL_GREETINGS:
                 logger.info("Trivial greeting - using chat (no tools needed)")
                 self._last_model_used = "claude-sonnet-4-5"
                 response = await self._chat(message)
-                self._last_bot_responses[self._current_user_id or "unknown"] = response
+                self._last_bot_responses[uid] = response
                 await self._learn_from_conversation(message, response)
                 return response
+
+            if msg_lower in _SHORT_REPLIES:
+                # Check if the last bot response ended with a question —
+                # "yes" is then a continuation, NOT a trivial message.
+                _nova_asked_question = (
+                    last_resp
+                    and last_resp.rstrip().rstrip("_").rstrip("*").rstrip().endswith("?")
+                )
+                if _nova_asked_question:
+                    logger.info("Short reply is continuation of Nova's question — routing to agent with context")
+                    self._last_model_used = "claude-sonnet-4-5"
+                    model_tier = self._get_model_tier(last_resp)
+                    response = await self.agent.run(
+                        task=agent_task,
+                        max_iterations=15,
+                        system_prompt=await self._build_system_prompt(message),
+                        model_tier=model_tier,
+                    )
+                    self._last_bot_responses[uid] = response
+                    await self._learn_from_conversation(message, response)
+                    # Detect proposals in the new response too
+                    self._detect_and_store_proposal(response, intent)
+                    return response
+                else:
+                    logger.info("Short reply with no prior question - using chat")
+                    self._last_model_used = "claude-sonnet-4-5"
+                    response = await self._chat(message)
+                    self._last_bot_responses[uid] = response
+                    await self._learn_from_conversation(message, response)
+                    return response
 
             # Everything else goes through agent (has tool access)
             logger.info("Conversation with substance - using agent with tools")
@@ -1603,7 +1636,12 @@ RULES:
             brain_context_parts = []
             channel = getattr(self, '_current_channel', None)
 
-            if self.brain:
+            # Skip brain context search for very short messages (< 4 words).
+            # Semantic search on "yes", "ok", "thanks" returns random noise
+            # that can confuse the model (e.g. contact names leaking in).
+            _skip_brain_search = len(message.split()) < 4
+
+            if self.brain and not _skip_brain_search:
                 # Get relevant knowledge from Brain (with talent context isolation)
                 if hasattr(self.brain, 'get_relevant_context'):
                     try:
@@ -1619,7 +1657,7 @@ RULES:
                         logger.debug(f"Could not get relevant context: {e}")
 
                 # Get conversation history for continuity (isolated to talent)
-                if hasattr(self.brain, 'get_conversation_context'):
+                if hasattr(self.brain, 'get_conversation_context') and not _skip_brain_search:
                     try:
                         try:
                             conv_context = await self.brain.get_conversation_context(
