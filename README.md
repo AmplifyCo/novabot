@@ -1,7 +1,7 @@
 <div align="center">
 
 <a href="https://github.com/AmplifyCo/novabot">
-  <img src="https://readme-typing-svg.demolab.com?font=Fira+Code&weight=600&size=28&duration=3000&pause=1000&color=8B5CF6&center=true&vCenter=true&multiline=true&width=700&height=80&lines=Nova+%F0%9F%A6%89+%E2%80%94+the+Auto+Bot;Your+Personal+AI+That+Actually+Gets+Things+Done" alt="Nova — the Auto Bot" />
+  <img src="https://readme-typing-svg.demolab.com?font=Fira+Code&weight=600&size=28&duration=3000&pause=1000&color=8B5CF6&center=true&vCenter=true&multiline=true&width=700&height=80&lines=Nova+%F0%9F%A6%89+%E2%80%94+the+Auto+Bot;Your+Non-Human+Assistant+That+Actually+Gets+Things+Done" alt="Nova — the Auto Bot" />
 </a>
 
 **Nova handles your emails, calls, social posts, and research while you focus on building.**
@@ -58,9 +58,9 @@ You are wearing every hat. Nova gives you leverage without adding headcount.
 
 ---
 
-Nova is a fully autonomous AI assistant you run on your own server. It connects to you via Telegram (and optionally voice, email, WhatsApp, and X), builds a persistent memory of who you are, and can take real-world actions on your behalf — from writing emails to making phone calls to researching the web.
+Nova is a fully autonomous Non-Human Assistant you run on your own server. It connects to you via Telegram (and optionally voice, email, WhatsApp, and X), builds a persistent memory of who you are, and can take real-world actions on your behalf — from writing emails to making phone calls to researching the web.
 
-Unlike SaaS AI assistants, Nova runs entirely on infrastructure you own. Your data stays on your server.
+Unlike SaaS assistants, Nova runs entirely on infrastructure you own. Your data stays on your server.
 
 ---
 
@@ -757,7 +757,7 @@ MIT — see [LICENSE](LICENSE) for details.
 
 ## ⚠️ Disclaimer
 
-Nova is an autonomous AI agent with real-world capabilities — it can send emails, post to social media, make phone calls, and execute shell commands. Monitor its behaviour, especially during initial deployment. Review [`RISKS.md`](../RISKS.md) for a full analysis of known risks and mitigations.
+Nova is an autonomous non-human agent with real-world capabilities — it can send emails, post to social media, make phone calls, and execute shell commands. Monitor its behaviour, especially during initial deployment. Review [`RISKS.md`](../RISKS.md) for a full analysis of known risks and mitigations.
 
 ---
 
