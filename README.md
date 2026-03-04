@@ -1,10 +1,18 @@
 <div align="center">
 
-# Your Personal AI That Actually Gets Things Done
+<a href="https://github.com/AmplifyCo/novabot">
+  <img src="https://readme-typing-svg.demolab.com?font=Fira+Code&weight=600&size=28&duration=3000&pause=1000&color=8B5CF6&center=true&vCenter=true&multiline=true&width=700&height=80&lines=Nova+%F0%9F%A6%89+%E2%80%94+the+Auto+Bot;Your+Personal+AI+That+Actually+Gets+Things+Done" alt="Nova — the Auto Bot" />
+</a>
 
 **Nova handles your emails, calls, social posts, and research while you focus on building.**
 
 Self-hosted. Open source. Your data never leaves your server.
+
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-3776ab.svg?style=flat-square&logo=python&logoColor=white)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-22c55e.svg?style=flat-square)](LICENSE)
+[![LanceDB](https://img.shields.io/badge/vector_store-LanceDB-f97316.svg?style=flat-square)](https://lancedb.com/)
+[![Telegram](https://img.shields.io/badge/channel-Telegram-2CA5E0.svg?style=flat-square&logo=telegram)](https://t.me/BotFather)
+[![LiteLLM](https://img.shields.io/badge/LLM_router-LiteLLM-8b5cf6.svg?style=flat-square)](https://litellm.ai/)
 
 </div>
 
@@ -49,16 +57,6 @@ You are wearing every hat. Nova gives you leverage without adding headcount.
 > Want to self-host or contribute? Full technical documentation below.
 
 ---
-
-# Nova 🦉 — the Auto Bot
-
-> A self-hosted personal AI agent that learns, remembers, and acts on your behalf.
-
-[![Python 3.10+](https://img.shields.io/badge/python-3.10+-3776ab.svg?logo=python&logoColor=white)](https://www.python.org/downloads/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-22c55e.svg)](LICENSE)
-[![LanceDB](https://img.shields.io/badge/vector_store-LanceDB-f97316.svg)](https://lancedb.com/)
-[![Telegram](https://img.shields.io/badge/channel-Telegram-2CA5E0.svg?logo=telegram)](https://t.me/BotFather)
-[![LiteLLM](https://img.shields.io/badge/LLM_router-LiteLLM-8b5cf6.svg)](https://litellm.ai/)
 
 Nova is a fully autonomous AI assistant you run on your own server. It connects to you via Telegram (and optionally voice, email, WhatsApp, and X), builds a persistent memory of who you are, and can take real-world actions on your behalf — from writing emails to making phone calls to researching the web.
 
@@ -108,74 +106,63 @@ These drives are defined in `brain/nova_purpose.py` and executed by `brain/atten
 
 Nova is built around a biological metaphor — no heavyweight frameworks, pure Python + asyncio.
 
-```
-┌──────────────────────────────────────────────────────────┐
-│                   CHANNELS (Transport)                    │
-│  Telegram · WhatsApp · Voice (Twilio) · Email · X/OAuth  │
-│              Thin wrappers — zero business logic          │
-└────────────────────────┬─────────────────────────────────┘
-                         │
-┌────────────────────────▼─────────────────────────────────┐
-│                      coreEngine                           │
-│         ConversationManager + AutonomousAgent             │
-│                                                           │
-│  Semantic Router → LLM Intent (Gemini Flash / Haiku)      │
-│  → Keyword fallback                                       │
-│                                                           │
-│  Model Routing:  flash · sonnet · quality tiers           │
-│  Providers:      Claude · Gemini · Grok (via LiteLLM)     │
-│  Fallback:       SmolLM2 (local, Ollama)                  │
-│                                                           │
-│  13 security layers · Circuit breaker · Rate limiting     │
-│  Context Thalamus (token budgeting + history pruning)     │
-│  Per-session locking · PII redaction · Output filtering   │
-│  Multi-dimensional delegation scoring (4 signals)         │
-└────────┬──────────────────────┬────────────────────────── ┘
-         │                      │
-┌────────▼────────┐   ┌─────────▼────────────────────────┐
-│     BRAIN        │   │       Execution Governor          │
-│                  │   │       (ExecutionGovernor)         │
-│  CoreBrain       │   │                                   │
-│  · 5 intelligence│   │  · PolicyGate — risk-based        │
-│    principles    │   │    permission checks              │
-│  · Bot identity  │   │  · StateMachine — IDLE→THINKING   │
-│  · Build memory  │   │    →EXECUTING→DONE                │
-│                  │   │  · DurableOutbox — deduplication  │
-│  DigitalClone    │   │    (no double sends)              │
-│  Brain (Memory)  │   │  · DeadLetterQueue — poison event │
-│  · Conversations │   │    handling + Telegram alerts     │
-│  · Preferences   │   └──────────────────────────────────┘
-│  · Contacts      │
-│  · Episodic mem  │
-│  · Working mem   │
-│  · Tone state    │
-└────────┬────────┘
-         │
-┌────────▼───────────────────────────────────────────────┐
-│                      TALENTS (Tools)                    │
-│                                                         │
-│  web_search  · web_fetch  · browser  · bash  · file    │
-│  email       · calendar   · reminder · contacts        │
-│  x_tool      · linkedin   · whatsapp · twilio_call     │
-│  nova_task (background queue)                          │
-│                                                         │
-│  60s timeout · auto-disable after 5 failures           │
-│  Just-in-time scoping — each subtask only sees its     │
-│  designated tools (not all 15+)                        │
-└────────┬───────────────────────────────────────────────┘
-         │
-┌────────▼───────────────────────────────────────────────┐
-│                  BACKGROUND SERVICES                    │
-│                                                         │
-│  ReminderScheduler   · 30s   · fire due reminders      │
-│  TaskRunner          · 15s   · DAG-based parallel exec  │
-│  AttentionEngine     · 6h    · purpose-driven proactivity (NovaPurpose) │
-│  SelfHealingMonitor  · 12h   · detect + fix; reports diffs via Telegram │
-│  MemoryConsolidator  · 6h    · prune stale turns       │
-│  DailyDigest         · 9am   · activity summary to Telegram │
-│  MemoryBackup        · daily · LanceDB snapshot to disk │
-│  Dashboard           · always · auth-gated web UI: chat + stats │
-└────────────────────────────────────────────────────────┘
+```mermaid
+graph TD
+    subgraph Channels["📡 CHANNELS (Transport)"]
+        TG[Telegram]
+        WA[WhatsApp]
+        VC[Voice / Twilio]
+        EM[Email]
+        XO[X / OAuth]
+    end
+
+    subgraph Core["⚙️ coreEngine"]
+        CM[ConversationManager]
+        SR[Semantic Router → LLM Intent → Keyword fallback]
+        MR[Model Routing: flash · sonnet · quality · local]
+        SEC[18 security layers · PII redaction · rate limiting]
+    end
+
+    subgraph Brain["🧠 BRAIN"]
+        CB[CoreBrain — 5 intelligence principles]
+        DCB[DigitalCloneBrain — Memory]
+        WM[Working Memory · Episodic · Tone]
+    end
+
+    subgraph Governor["🛡️ Execution Governor"]
+        PG[PolicyGate — risk classification]
+        SM[StateMachine — IDLE→THINKING→EXECUTING→DONE]
+        OB[DurableOutbox · DeadLetterQueue]
+    end
+
+    subgraph Tools["🔧 TALENTS (Tools)"]
+        T1[web_search · web_fetch · browser]
+        T2[email · calendar · reminder · contacts]
+        T3[x_tool · linkedin · whatsapp · twilio_call]
+        T4[nova_task · bash · file · learn_skill]
+    end
+
+    subgraph Background["⏰ BACKGROUND SERVICES"]
+        RS[ReminderScheduler · 30s]
+        TR[TaskRunner · 15s · DAG parallel exec]
+        AE[AttentionEngine · 6h · proactive observations]
+        SH[SelfHealingMonitor · 12h · auto-fix]
+        DD[DailyDigest · 9am · MemoryBackup · daily]
+        DB[Dashboard · auth-gated web UI]
+    end
+
+    Channels --> Core
+    Core --> Brain
+    Core --> Governor
+    Core --> Tools
+    Tools --> Background
+
+    style Channels fill:#1e293b,stroke:#8b5cf6,color:#e2e8f0
+    style Core fill:#1e293b,stroke:#3b82f6,color:#e2e8f0
+    style Brain fill:#1e293b,stroke:#f97316,color:#e2e8f0
+    style Governor fill:#1e293b,stroke:#ef4444,color:#e2e8f0
+    style Tools fill:#1e293b,stroke:#22c55e,color:#e2e8f0
+    style Background fill:#1e293b,stroke:#6366f1,color:#e2e8f0
 ```
 
 ---
@@ -232,7 +219,10 @@ Third-party content (emails from others) is **summarised before storage**, never
 
 ## 📋 Intelligent Delegation (Google DeepMind Framework)
 
-Nova implements the key principles from the *Intelligent AI Delegation* research paper, giving autonomous background tasks the same trust properties as human-delegated work:
+Nova implements the key principles from the *Intelligent AI Delegation* research paper, giving autonomous background tasks the same trust properties as human-delegated work.
+
+<details>
+<summary>View all 10 delegation principles</summary>
 
 | Principle | What's implemented |
 |---|---|
@@ -246,6 +236,8 @@ Nova implements the key principles from the *Intelligent AI Delegation* research
 | 🔐 **Continuous authorization** | Task DB status is re-read before every subtask; "stop task" cancels immediately, not just between tasks |
 | 🎯 **Multi-dimensional routing** | 4-signal delegation score (tool variety, reversibility, complexity keywords, scope) catches complex tasks the LLM might under-label |
 | 💰 **Task budget enforcement** | Hard limits: 200k cumulative tokens or 30 minutes wall time per task; partial results delivered if either is hit |
+
+</details>
 
 ---
 
@@ -275,7 +267,10 @@ Each wave runs via `asyncio.gather()`. Steps 1–3 execute concurrently, cutting
 
 ## 🔒 Security
 
-Nova applies **18 defence layers** to every message:
+Nova applies **18 defence layers** to every message.
+
+<details>
+<summary>View all 18 security layers</summary>
 
 1. 🚦 Rate limiting per user
 2. 🧹 Input sanitization (length, encoding)
@@ -295,6 +290,8 @@ Nova applies **18 defence layers** to every message:
 16. 🔐 Fail-closed channels (WhatsApp/Voice reject all if allow-list not configured)
 17. 🔑 Timing-safe auth (HMAC constant-time comparison for API keys)
 18. ☢️ Per-user state isolation (no cross-user context leakage)
+
+</details>
 
 Risk and supervision are formally documented in [`RISKS.md`](../RISKS.md) and [`SUPERVISION.md`](../SUPERVISION.md).
 
@@ -382,7 +379,8 @@ Nova starts and connects to Telegram. Send it a message to begin.
 
 ---
 
-## ☁️ Deployment (EC2 / Amazon Linux)
+<details>
+<summary><h2>☁️ Deployment (EC2 / Amazon Linux)</h2></summary>
 
 ```bash
 # SSH in
@@ -556,6 +554,8 @@ launchctl unload ~/Library/LaunchAgents/com.nova.digitalclone.plist
 rm ~/Library/LaunchAgents/com.nova.digitalclone.plist
 ```
 
+</details>
+
 ---
 
 ## 🧰 Tech Stack
@@ -577,7 +577,8 @@ rm ~/Library/LaunchAgents/com.nova.digitalclone.plist
 
 ## 🔄 Data Flow Examples
 
-**"Find the top Thai restaurants in Fremont, CA"**
+<details>
+<summary><b>"Find the top Thai restaurants in Fremont, CA"</b> — inline action</summary>
 
 ```
 1. Telegram → Heart
@@ -595,7 +596,10 @@ rm ~/Library/LaunchAgents/com.nova.digitalclone.plist
    → data/intent_training/samples.jsonl (training data for future fine-tuning)
 ```
 
-**"Research AI funding trends and write me a summary"**
+</details>
+
+<details>
+<summary><b>"Research AI funding trends and write me a summary"</b> — background task</summary>
 
 ```
 1. Telegram → Heart
@@ -615,7 +619,10 @@ rm ~/Library/LaunchAgents/com.nova.digitalclone.plist
 6. Audit saved: data/tasks/{id}_audit.json (per-step tokens, timing, success)
 ```
 
-**"Draft a tweet about our product launch" → "yes"**
+</details>
+
+<details>
+<summary><b>"Draft a tweet about our product launch" → "yes"</b> — pending action confirmation</summary>
 
 ```
 1. Telegram → Heart
@@ -636,9 +643,14 @@ rm ~/Library/LaunchAgents/com.nova.digitalclone.plist
    → Response: "Posted! Here's the link: ..."
 ```
 
+</details>
+
 ---
 
 ## 📁 Project Structure
+
+<details>
+<summary>View full project tree</summary>
 
 ```
 novabot/
@@ -734,6 +746,8 @@ novabot/
 ├── SUPERVISION.md                         # Supervision methods documentation
 └── requirements.txt
 ```
+
+</details>
 
 ---
 
