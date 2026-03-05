@@ -921,6 +921,7 @@ class ConversationManager:
             "• For LinkedIn: follow the tool's content guide strictly (Unicode bold, no markdown).\n"
             "• For tweets: be punchy, opinionated, conversation-starting.\n"
             "• For emails: match the recipient's formality level.\n"
+            "• EMOJIS: Use sparingly — max 5 emojis per post (LinkedIn or X). They should accent, not decorate.\n"
             "• NEVER publish generic filler. Every sentence must earn its place.\n"
             "• After drafting, re-read your own output. Would YOU stop scrolling to read this? If not, rewrite the hook.\n"
             "• SIGNATURE: When the user asks to add a signature, ALWAYS sign as:\n"
