@@ -637,18 +637,34 @@ class SkillLearner:
             return False
 
         bot_name = os.getenv("BOT_NAME", "Nova")
+        owner_name = os.getenv("OWNER_NAME", "User")
         logger.info(f"SkillLearner: attempting self-registration on {spec.name} as {bot_name}")
 
         for op in register_ops:
             try:
                 url = f"{spec.base_url.rstrip('/')}{op['path']}"
-                # Build registration payload from params/body_fields
+                # Build registration payload from body_fields OR params
+                fields = op.get("body_fields") or op.get("params") or {}
                 body = {}
-                for field_name, field_desc in op.get("body_fields", {}).items():
-                    if "name" in field_name.lower() or "username" in field_name.lower():
+                for field_name, field_desc in fields.items():
+                    fl = field_name.lower()
+                    if "name" in fl or "username" in fl:
                         body[field_name] = bot_name
-                    elif "bot" in field_name.lower() or "type" in field_name.lower():
+                    elif "description" in fl or "bio" in fl or "about" in fl:
+                        body[field_name] = f"AI assistant for {owner_name}. Autonomous agent powered by Claude."
+                    elif "bot" in fl or "is_bot" in fl or "type" in fl:
                         body[field_name] = True
+                    elif "email" in fl:
+                        body[field_name] = f"{bot_name.lower()}@agent.local"
+                    elif "url" in fl or "website" in fl:
+                        body[field_name] = ""
+
+                # Fallback: if no fields parsed, try common registration fields
+                if not body:
+                    body = {"name": bot_name, "description": f"AI assistant for {owner_name}"}
+                    logger.debug(f"No body_fields parsed, using fallback: {body}")
+
+                logger.info(f"SkillLearner: registering at {url} with body keys: {list(body.keys())}")
 
                 async with aiohttp.ClientSession() as session:
                     async with session.post(
@@ -659,13 +675,15 @@ class SkillLearner:
                     ) as resp:
                         if resp.status in (200, 201):
                             data = await resp.json()
-                            # Look for API key in response
+                            # Look for API key in response (check nested too)
                             api_key = (
                                 data.get("api_key")
                                 or data.get("apiKey")
                                 or data.get("token")
                                 or data.get("access_token")
                                 or data.get("key")
+                                or (data.get("data", {}) or {}).get("api_key")
+                                or (data.get("data", {}) or {}).get("token")
                             )
                             if api_key and spec.env_var_name:
                                 self.credential_store.set(
@@ -678,13 +696,18 @@ class SkillLearner:
                                     f"saved {spec.env_var_name}"
                                 )
                                 return True
+                            else:
+                                logger.info(
+                                    f"Registration returned 200 but no API key found in response. "
+                                    f"Keys: {list(data.keys())}"
+                                )
                         else:
                             body_text = await resp.text()
-                            logger.debug(
-                                f"Self-registration failed ({resp.status}): {body_text[:200]}"
+                            logger.info(
+                                f"Self-registration failed ({resp.status}): {body_text[:300]}"
                             )
             except Exception as e:
-                logger.debug(f"Self-registration attempt failed: {e}")
+                logger.warning(f"Self-registration attempt failed: {e}")
 
         return False
 
