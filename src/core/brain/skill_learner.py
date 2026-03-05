@@ -696,8 +696,9 @@ class SkillLearner:
             return False
 
         # Execute registration with LLM-driven retry on failure
-        max_attempts = 5
-        for attempt in range(max_attempts):
+        max_attempts = 3  # Only count non-429 failures
+        attempt = 0
+        while attempt < max_attempts:
             try:
                 async with aiohttp.ClientSession() as session:
                     async with session.request(
@@ -740,21 +741,31 @@ class SkillLearner:
                                 )
                                 return False
 
-                        # Rate limited — respect retry_after
+                        # Rate limited — wait the actual retry_after, then retry
+                        # (does NOT count as an attempt — not our fault)
                         if resp.status == 429:
                             try:
                                 err = json.loads(resp_text)
-                                wait = min(int(err.get("retry_after_seconds", 60)), 120)
+                                wait = int(err.get("retry_after_seconds", 60))
                             except Exception:
                                 wait = 60
+                            # Cap at 10 min; if longer, give up gracefully
+                            if wait > 600:
+                                logger.info(
+                                    f"SkillLearner: rate limit too long ({wait}s), "
+                                    f"will retry on next skill learn"
+                                )
+                                return False
                             logger.info(
-                                f"SkillLearner: rate limited, waiting {wait}s"
+                                f"SkillLearner: rate limited, waiting {wait}s "
+                                f"(resets at {err.get('reset_at', 'unknown')})"
                             )
                             await asyncio.sleep(wait)
-                            continue  # Retry same request after waiting
+                            continue  # Retry same request — don't increment attempt
 
                         # Non-success — ask LLM to analyze and retry
-                        if attempt < max_attempts - 1:
+                        attempt += 1
+                        if attempt < max_attempts:
                             retry = await self._llm_analyze_failure(
                                 spec, reg_url, method, body, resp.status,
                                 resp_text, api_key_field, raw_spec,
@@ -780,6 +791,7 @@ class SkillLearner:
                             )
             except Exception as e:
                 logger.warning(f"Self-registration request failed: {e}")
+                attempt += 1
 
         return False
 
