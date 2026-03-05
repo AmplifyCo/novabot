@@ -127,6 +127,8 @@ class ConversationManager:
             ConversationManager._PERSONAS = self._load_personas()
         if not ConversationManager._CAPABILITIES:
             ConversationManager._CAPABILITIES = self._load_capabilities()
+        if not ConversationManager._TOOL_GUIDES:
+            ConversationManager._TOOL_GUIDES = self._load_tool_guides()
 
         self._last_model_used = "claude-sonnet-4-5"
 
@@ -920,6 +922,7 @@ class ConversationManager:
     _PERSONAS_DIR = Path(__file__).parent / "personas"
     _PERSONAS: dict = {}  # populated by _load_personas()
     _CAPABILITIES: str = ""  # populated from capabilities.md
+    _TOOL_GUIDES: dict = {}  # populated by _load_tool_guides()
 
     @classmethod
     def _load_personas(cls):
@@ -955,6 +958,45 @@ class ConversationManager:
         if personas:
             logger.info(f"Loaded {len(personas)} persona(s) from {persona_dir}")
         return personas
+
+    @classmethod
+    def _load_tool_guides(cls) -> dict:
+        """Load tool usage guidelines from .md files next to each tool.
+
+        Core tools: src/core/tools/{name}_guide.md
+        Plugins:    src/core/tools/plugins/{name}/guide.md
+        """
+        guides = {}
+        tools_dir = Path(__file__).parent / "tools"
+
+        # Core tool guides: {name}_guide.md
+        for md_file in sorted(tools_dir.glob("*_guide.md")):
+            # e.g. "email_guide.md" → key "email"
+            name = md_file.stem.replace("_guide", "")
+            try:
+                content = md_file.read_text(encoding="utf-8").strip()
+                if content:
+                    guides[name] = content
+                    logger.debug(f"Loaded tool guide: {name} ({len(content)} chars)")
+            except Exception as e:
+                logger.error(f"Failed to load tool guide {name}: {e}")
+
+        # Plugin guides: plugins/{name}/guide.md
+        plugins_dir = tools_dir / "plugins"
+        if plugins_dir.exists():
+            for guide_file in sorted(plugins_dir.glob("*/guide.md")):
+                name = guide_file.parent.name  # folder name = plugin name
+                try:
+                    content = guide_file.read_text(encoding="utf-8").strip()
+                    if content:
+                        guides[name] = content
+                        logger.debug(f"Loaded plugin guide: {name} ({len(content)} chars)")
+                except Exception as e:
+                    logger.error(f"Failed to load plugin guide {name}: {e}")
+
+        if guides:
+            logger.info(f"Loaded {len(guides)} tool guide(s)")
+        return guides
 
     def _extract_contact_from_message(self, message: str) -> Optional[str]:
         """Extract a person's name from the message for contact intelligence (2D).
@@ -3445,6 +3487,24 @@ Examples:
         # Inject validated tool routing hints (restrictive — agent scoped to these + safe readonly tools)
         if tool_hints:
             task += f"\n\nTools for this task: {', '.join(tool_hints)}"
+
+        # Inject tool-specific usage guidelines (only for tools in this task)
+        # Map tool_hint names to guide file names where they differ
+        _GUIDE_ALIASES = {
+            "make_phone_call": "phone_call",
+            "send_whatsapp_message": "whatsapp",
+            "web_search": "web_research", "web_fetch": "web_research", "browser": "web_research",
+        }
+        if tool_hints and self._TOOL_GUIDES:
+            seen = set()
+            guide_sections = []
+            for t in tool_hints:
+                guide_key = _GUIDE_ALIASES.get(t, t)
+                if guide_key in self._TOOL_GUIDES and guide_key not in seen:
+                    guide_sections.append(self._TOOL_GUIDES[guide_key])
+                    seen.add(guide_key)
+            if guide_sections:
+                task += "\n\nTOOL USAGE GUIDELINES:\n" + "\n\n---\n\n".join(guide_sections)
 
         # Pre-resolve contacts for communication tasks — ONLY for the trusted principal.
         # Never expose the contacts list to untrusted channels or callers.

@@ -29,8 +29,8 @@ from ..types import ToolResult
 logger = logging.getLogger(__name__)
 
 # ── LinkedIn Content Composition Guide ────────────────────────────────────────
-# Loaded from src/core/personas/linkedin_guide.md — edit the .md file to update.
-_GUIDE_PATH = Path(__file__).parent.parent / "personas" / "linkedin_guide.md"
+# Loaded from src/core/tools/linkedin_guide.md — edit the .md file to update.
+_GUIDE_PATH = Path(__file__).parent / "linkedin_guide.md"
 try:
     _CONTENT_GUIDE = _GUIDE_PATH.read_text(encoding="utf-8").strip()
     logger.debug("LinkedIn content guide loaded from %s", _GUIDE_PATH)
