@@ -1228,8 +1228,31 @@ class ConversationManager:
                 base_msg += risk_note
             return base_msg
 
-        # Detect persona early so _build_execution_plan can inject style/research context
-        persona = self._detect_persona(message, intent) if action == "action" else ""
+        # Detect persona: LLM-derived (from intent classifier) with keyword fallback
+        persona = intent.get("persona", "") if action == "action" else ""
+        if not persona and action == "action":
+            persona = self._detect_persona(message, intent)  # keyword fallback
+
+        # LLM-driven correction detection (supplements keyword detection at line 686)
+        if intent.get("is_correction") and self.episodic_memory:
+            _uid_corr = self._current_user_id or "unknown"
+            _last_resp = self._last_bot_responses.get(_uid_corr, "")
+            if _last_resp and not self._correction_just_detected:
+                # LLM flagged this as correction but keyword detection missed it
+                try:
+                    await self.episodic_memory.record(
+                        action="User corrected response",
+                        outcome=f"Correction: {message[:200]}",
+                        success=False,
+                        context=f"Original response was: {_last_resp[:100]}",
+                        tool_used="correction",
+                    )
+                    logger.info(f"LLM-detected correction: {message[:60]}")
+                    if self.working_memory:
+                        self.working_memory.add_correction(message[:100])
+                    self._correction_just_detected = message[:100]
+                except Exception:
+                    pass
 
         # Fetch tool performance stats for reasoning context (non-blocking)
         _tool_perf = {}
@@ -1243,7 +1266,7 @@ class ConversationManager:
         # 3D: Use deliberation for judgment-heavy questions, else standard preflight
         _preflight = ""
         if action == "action":
-            _model_tier = self._get_model_tier(message)
+            _model_tier = intent.get("model_tier") or self._get_model_tier(message)  # LLM → fallback
             if _model_tier in ("sonnet", "quality") and self.gemini_client:
                 brain_ctx = ""
                 if self.brain and hasattr(self.brain, 'get_relevant_context'):
@@ -1309,7 +1332,8 @@ class ConversationManager:
 
         elif action == "action":
             # Explicit or inferred action — needs tools
-            model_tier = self._get_model_tier(message)
+            # Model tier: LLM-derived from intent classifier, keyword fallback
+            model_tier = intent.get("model_tier") or self._get_model_tier(message)
             # persona already detected above for _build_execution_plan
             logger.info(f"Action [{model_tier}] persona={persona} (inferred: {inferred_task or 'direct'})")
 
@@ -1975,7 +1999,17 @@ User says "good morning" → none"""
         try:
             result = await self._parse_intent(message, conversation_history)
             tools_str = ",".join(result.get("tool_hints", [])) or "none"
-            logger.info(f"Intent: {result['action']} (confidence: {result['confidence']}, task: {result.get('inferred_task', 'none')}, tools: {tools_str})")
+            _extras = []
+            if result.get("model_tier"):
+                _extras.append(f"tier={result['model_tier']}")
+            if result.get("persona"):
+                _extras.append(f"persona={result['persona']}")
+            if result.get("needs_research"):
+                _extras.append("research=yes")
+            if result.get("is_correction"):
+                _extras.append("correction=yes")
+            _extra_str = f", {', '.join(_extras)}" if _extras else ""
+            logger.info(f"Intent: {result['action']} (confidence: {result['confidence']}, task: {result.get('inferred_task', 'none')}, tools: {tools_str}{_extra_str})")
             # Attach history so _execute_with_primary_model can include it in agent context
             result["_conversation_history"] = conversation_history
 
@@ -2145,77 +2179,59 @@ RECENT CONVERSATION (use this to understand context):
 {conversation_history}
 ---"""
 
-            intent_prompt = f"""Intent classifier. Map user message to the right intent and tools.
+            intent_prompt = f"""Intent classifier. Map user message to the right intent, tools, and execution strategy.
 {tool_context}{history_context}
-Return EXACTLY: intent|confidence|inferred_task|tools|needs_background
+Return EXACTLY: intent|confidence|inferred_task|tools|needs_background|model_tier|persona|needs_research|is_correction
 
-- intent: one of the intent names below
+Fields (pipe-separated, no spaces around pipes):
+- intent: action / question / conversation / clarify / build_feature / status / git_update / restart
 - confidence: high / medium / low
-- inferred_task: expand vague requests into a concrete actionable description using the Purpose context (manage email/calendar/social media/research on principal's behalf). Never return "none" for action intents.
-- tools: comma-separated tool names from AVAILABLE TOOLS that will be needed, or "none"
-- needs_background: "yes" ONLY for genuinely complex tasks that require 3+ DIFFERENT tool calls AND multi-step research (e.g., "research AI trends and draft a report"). Say "no" for: status checks, simple questions, looking something up, single actions, anything the user expects an immediate answer to. When in doubt, say "no".
+- inferred_task: expand vague requests into concrete actionable description. Never "none" for action intents.
+- tools: comma-separated tool names from AVAILABLE TOOLS, or "none"
+- needs_background: "yes" ONLY for tasks needing 3+ different tools AND multi-step research. Default "no".
+- model_tier: which model should execute this task:
+  "quality" = high-stakes communication (composing emails, formal messages, professional content)
+  "sonnet" = complex reasoning, coding, debugging, system analysis, strategy, architecture
+  "haiku" = creative brainstorming, summarization, rewriting, comparisons, descriptions
+  "flash" = everything else (simple queries, reminders, calendar, contacts, chit-chat)
+- persona: which behavioral persona to use:
+  "content_writer" = creating posts, tweets, articles, thought leadership content
+  "researcher" = finding information, analyzing, comparing, investigating topics
+  "communicator" = sending emails, messages, making calls, replying to people
+  "scheduler" = calendar events, reminders, meetings, appointments
+  "operator" = everything else (system ops, file management, general tasks)
+  "none" = for non-action intents (questions, conversation)
+- needs_research: "yes" if content creation requires researching a topic first (e.g., "write about AI trends"). "no" for exact text posts (e.g., "post this: hello world") or non-content tasks.
+- is_correction: "yes" if user is correcting/adjusting a previous response (e.g., "no make it shorter", "that's wrong", "I meant X not Y", "too formal", "rewrite it"). "no" otherwise.
 
-Intents:
-- action: needs a tool to execute (email, calendar, bash, file, web, search, post, reminder, etc.)
-- question: answerable from knowledge alone, no tool needed ("what is X?", "how does Y work?")
-- conversation: social/casual ("good morning", "thanks", "call me boss")
-- clarify: genuinely ambiguous even with context
-- build_feature: add/modify the bot's own code
-- status / git_update / restart: system commands
-
-KEY RULE — question vs action:
-"question" = Claude can answer from its own knowledge, no external data needed
-"action" = requires fetching live data OR using a tool → classify as action even if phrased as a question
-
-TOOL MAPPING RULE:
-For action intents, list the specific tools needed from AVAILABLE TOOLS above.
-Multiple tools allowed (e.g. email_list,email_send for "reply to unread emails").
-Use "none" only when no tool applies.
-
-GOAL ELABORATION RULE:
-For short/vague action requests, expand inferred_task to be specific enough to execute:
-- "Show presence on X" → Search X for recent AI/tech discussions, post 2-3 thoughtful replies with principal's voice
-- "Research openclaw" → Search web and X for openclaw, compile findings into a summary
-- "Handle my emails" → Check inbox, summarize unread, draft replies for important ones
+KEY RULES:
+- "question" = answerable from knowledge, no tool needed. "action" = needs live data or a tool.
+- For action intents, list specific tools needed. Multiple allowed. "none" only when no tool applies.
+- For short/vague requests, expand inferred_task to be executable.
 
 Examples:
-"Post on X: AI is the future" → action|high|Post exact text: AI is the future|x_tool|no
-"Show presence on X" → action|high|Search X for recent AI/tech discussions and post 2-3 thoughtful replies representing principal's perspective|x_tool,web_search|yes
-"Research openclaw" → action|high|Search web and X for openclaw autonomous agent, compile findings into a report|web_search,x_tool|yes
-"Check my email" → action|high|Check inbox for new messages|email_list|no
-"Any unread emails?" → action|high|Check inbox for unread emails|email_list|no
-"Do I have messages?" → action|high|Check inbox for new messages|email_list|no
-"What's in my inbox?" → action|high|Check inbox for new messages|email_list|no
-"Reply to John's email" → action|high|Reply to John's email|email_list,email_send|no
-"Any meetings today?" → action|high|Check calendar for today's events|calendar_list|no
-"What's on my calendar?" → action|high|Check calendar for upcoming events|calendar_list|no
-"Schedule a call with Sarah tomorrow at 2pm" → action|high|Create calendar event: call with Sarah tomorrow 2pm|calendar_create|no
-"Remind me to call John at 3pm" → action|high|Set reminder: call John at 3pm|reminder_set|no
-"Call Alex" → action|high|Look up Alex's phone number in contacts and call them|contacts,make_phone_call|no
-"Call Mom and ask about dinner" → action|high|Look up Mom's number in contacts and call her to ask about dinner|contacts,make_phone_call|no
-"Text John hello" → action|high|Look up John's number in contacts and send WhatsApp message|contacts,send_whatsapp_message|no
-"Do you have Sarah's number?" → action|high|Search contacts for Sarah's phone number|contacts|no
-"Search for flights to NYC" → action|high|Search flights to NYC|web_search|no
-"yes" (after bot proposed deleting emails) → action|high|Delete the emails as proposed|email_delete|no
-"do it" / "go ahead" / "confirm" → action|high|Execute the proposed action|none|no
-"Good morning!" → conversation|high|none|none|no
-"Call me boss" → conversation|high|none|none|no
-"What's the capital of France?" → question|high|none|none|no
-"How does photosynthesis work?" → question|high|none|none|no
-"Do the thing" (no context) → clarify|low|What would you like me to do?|none|no
-
-Additional Examples for Background:
-"Research quantum computing" → action|high|Research quantum computing and summarize findings|web_search|yes
-"Find best laptop under $1000" → action|high|Research and compare laptops under $1000|web_search|yes
-"Plan a trip to Paris" → action|high|Plan trip to Paris including flights and hotels|web_search,calendar|yes
-"Check weather" → action|high|Check current weather|web_search|no
-"Set alarm for 7am" → action|high|Set alarm for 7am|reminder_set|no"""
+"Post on X: AI is the future" → action|high|Post exact text: AI is the future|x_tool|no|quality|content_writer|no|no
+"Write a LinkedIn post about AI trends" → action|high|Research AI trends and write LinkedIn post|linkedin,web_search|yes|quality|content_writer|yes|no
+"Check my email" → action|high|Check inbox for new messages|email|no|flash|communicator|no|no
+"Reply to John's email" → action|high|Reply to John's email|email|no|quality|communicator|no|no
+"Research quantum computing" → action|high|Research quantum computing and summarize|web_search|yes|sonnet|researcher|no|no
+"Schedule a call with Sarah at 2pm" → action|high|Create calendar event: call with Sarah 2pm|calendar|no|flash|scheduler|no|no
+"Remind me to call John at 3pm" → action|high|Set reminder: call John at 3pm|reminder|no|flash|scheduler|no|no
+"Call Mom" → action|high|Look up Mom's number and call|contacts,make_phone_call|no|flash|communicator|no|no
+"Text John hello" → action|high|Send WhatsApp to John: hello|contacts,send_whatsapp_message|no|flash|communicator|no|no
+"yes" (after bot proposed action) → action|high|Execute the proposed action|none|no|flash|operator|no|no
+"Good morning!" → conversation|high|none|none|no|flash|none|no|no
+"What's the capital of France?" → question|high|none|none|no|flash|none|no|no
+"No, make it shorter" → action|high|Rewrite the previous response to be shorter|none|no|flash|none|no|yes
+"That's wrong, I said Tuesday" → action|high|Correct to Tuesday as specified|none|no|flash|none|no|yes
+"Too formal, make it casual" → action|high|Rewrite in a casual tone|none|no|quality|content_writer|no|yes
+"Do the thing" (no context) → clarify|low|What would you like me to do?|none|no|flash|none|no|no"""
 
             # Try primary intent client (Gemini Flash via LiteLLM)
             try:
                 response = await intent_client.create_message(
                     model=intent_model,
-                    max_tokens=120,
+                    max_tokens=200,
                     system=intent_prompt,
                     messages=[{"role": "user", "content": message}]
                 )
@@ -2248,13 +2264,23 @@ Additional Examples for Background:
             raw_response = response.content[0].text.strip()
             logger.debug(f"LLM raw intent response: {raw_response}")
 
-            # Parse "intent|confidence|inferred_task|tools|needs_background" format (5 fields)
-            parts = raw_response.split("|", 4)
+            # Parse 9-field format: intent|confidence|inferred_task|tools|needs_background|model_tier|persona|needs_research|is_correction
+            parts = raw_response.split("|", 8)
             intent_text = parts[0].strip().lower()
             confidence_text = parts[1].strip().lower() if len(parts) > 1 else "medium"
             inferred_task = parts[2].strip() if len(parts) > 2 else "none"
             tool_hints_raw = parts[3].strip() if len(parts) > 3 else "none"
             needs_background = parts[4].strip().lower() == "yes" if len(parts) > 4 else False
+            model_tier = parts[5].strip().lower() if len(parts) > 5 else "flash"
+            persona = parts[6].strip().lower() if len(parts) > 6 else "operator"
+            needs_research = parts[7].strip().lower() == "yes" if len(parts) > 7 else False
+            is_correction = parts[8].strip().lower() == "yes" if len(parts) > 8 else False
+
+            # Validate model_tier and persona
+            if model_tier not in ("flash", "haiku", "sonnet", "quality"):
+                model_tier = "flash"
+            if persona not in ("content_writer", "researcher", "communicator", "scheduler", "operator", "none"):
+                persona = "operator"
 
             # Map confidence words to numbers
             confidence_map = {"high": 0.9, "medium": 0.7, "low": 0.4}
@@ -2299,6 +2325,10 @@ Additional Examples for Background:
                     if tool_hints:
                         result["tool_hints"] = tool_hints
                     result["needs_background"] = needs_background
+                    result["model_tier"] = model_tier
+                    result["persona"] = persona if persona != "none" else ""
+                    result["needs_research"] = needs_research
+                    result["is_correction"] = is_correction
                     return result
 
             # Unrecognized → conversation
@@ -3494,7 +3524,9 @@ Additional Examples for Background:
                 logger.debug(f"Style example retrieval skipped: {e}")
 
         # ── Research-before-write: two-phase directive for topic-based content ─
-        if persona == "content_writer" and self._content_needs_research(message, intent):
+        # LLM-derived needs_research from intent classifier, keyword fallback
+        _needs_research = intent.get("needs_research", False) or self._content_needs_research(message, intent)
+        if persona == "content_writer" and _needs_research:
             # Prepend research directive — agent already has web_search in allowed_tools
             research_directive = (
                 "\n\nMANDATORY TWO-PHASE APPROACH:\n"
