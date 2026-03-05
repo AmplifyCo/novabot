@@ -696,7 +696,7 @@ class SkillLearner:
             return False
 
         # Execute registration with LLM-driven retry on failure
-        max_attempts = 3
+        max_attempts = 5
         for attempt in range(max_attempts):
             try:
                 async with aiohttp.ClientSession() as session:
@@ -740,6 +740,19 @@ class SkillLearner:
                                 )
                                 return False
 
+                        # Rate limited — respect retry_after
+                        if resp.status == 429:
+                            try:
+                                err = json.loads(resp_text)
+                                wait = min(int(err.get("retry_after_seconds", 60)), 120)
+                            except Exception:
+                                wait = 60
+                            logger.info(
+                                f"SkillLearner: rate limited, waiting {wait}s"
+                            )
+                            await asyncio.sleep(wait)
+                            continue  # Retry same request after waiting
+
                         # Non-success — ask LLM to analyze and retry
                         if attempt < max_attempts - 1:
                             retry = await self._llm_analyze_failure(
@@ -754,8 +767,9 @@ class SkillLearner:
                                 api_key_field = retry.get("api_key_field", api_key_field)
                                 logger.info(
                                     f"SkillLearner: LLM retry plan → "
-                                    f"{method} {reg_url} body_keys={list(body.keys())}"
+                                    f"{method} {reg_url} body={json.dumps(body)[:200]}"
                                 )
+                                await asyncio.sleep(2)  # Brief pause before retry
                                 continue
                             else:
                                 logger.info("SkillLearner: LLM says no retry possible")
