@@ -184,14 +184,16 @@ class SkillLearner:
     Leverages existing PluginLoader for zero-hub-edit integration.
     """
 
-    def __init__(self, gemini_client=None, plugin_loader=None):
+    def __init__(self, gemini_client=None, plugin_loader=None, credential_store=None):
         """
         Args:
             gemini_client: GeminiClient for spec parsing + code generation.
             plugin_loader: PluginLoader instance for hot-reload after generation.
+            credential_store: NovaCredentialStore for saving obtained API keys.
         """
         self.llm = gemini_client
         self.plugin_loader = plugin_loader
+        self.credential_store = credential_store
         self._plugins_dir = _PLUGINS_DIR
         self._learned_skills: Dict[str, SkillMetadata] = {}
         self._load_skill_metadata()
@@ -253,9 +255,24 @@ class SkillLearner:
         if not ok:
             return False, msg
 
-        # Step 6: Check env vars
+        # Step 6: Check env vars (credential store → os.getenv)
         env_vars = manifest.get("env_vars", [])
-        missing_env = [v for v in env_vars if not os.getenv(v)]
+        missing_env = [
+            v for v in env_vars
+            if not (self.credential_store and self.credential_store.resolve(v))
+            and not os.getenv(v)
+        ]
+
+        # Step 6b: Try self-registration if API has unauthenticated register endpoint
+        if missing_env and self.credential_store:
+            reg_result = await self._try_self_registration(parsed, missing_env)
+            if reg_result:
+                # Re-check after registration saved credentials
+                missing_env = [
+                    v for v in env_vars
+                    if not self.credential_store.resolve(v) and not os.getenv(v)
+                ]
+
         if missing_env:
             status = "pending_env"
             env_msg = (
@@ -589,6 +606,87 @@ class SkillLearner:
         # The caller (learn_from_url) gets registry from SkillTool.
         # For now, return None — the SkillTool overrides this.
         return None
+
+    # ── Credential Management ─────────────────────────────────────────────
+
+    def save_credential(self, key: str, value: str, source: str = "manual"):
+        """Save a credential to the store. Called by tools or agent."""
+        if self.credential_store:
+            self.credential_store.set(key, value, source=source)
+            return True
+        return False
+
+    async def _try_self_registration(
+        self, spec: ParsedSpec, missing_env: List[str]
+    ) -> bool:
+        """Attempt autonomous registration if spec has an unauthenticated register endpoint.
+
+        Looks for register/signup operations that don't require auth.
+        If found, calls the endpoint and saves the obtained API key.
+
+        Returns True if any credential was obtained and saved.
+        """
+        # Find registration-like endpoints that are unauthenticated
+        register_ops = [
+            op for op in spec.operations
+            if any(kw in op.get("name", "").lower() for kw in ("register", "signup", "create_account"))
+            and op.get("method", "").upper() == "POST"
+        ]
+
+        if not register_ops:
+            return False
+
+        bot_name = os.getenv("BOT_NAME", "Nova")
+        logger.info(f"SkillLearner: attempting self-registration on {spec.name} as {bot_name}")
+
+        for op in register_ops:
+            try:
+                url = f"{spec.base_url.rstrip('/')}{op['path']}"
+                # Build registration payload from params/body_fields
+                body = {}
+                for field_name, field_desc in op.get("body_fields", {}).items():
+                    if "name" in field_name.lower() or "username" in field_name.lower():
+                        body[field_name] = bot_name
+                    elif "bot" in field_name.lower() or "type" in field_name.lower():
+                        body[field_name] = True
+
+                async with aiohttp.ClientSession() as session:
+                    async with session.post(
+                        url,
+                        json=body,
+                        timeout=aiohttp.ClientTimeout(total=15),
+                        headers={"Content-Type": "application/json"},
+                    ) as resp:
+                        if resp.status in (200, 201):
+                            data = await resp.json()
+                            # Look for API key in response
+                            api_key = (
+                                data.get("api_key")
+                                or data.get("apiKey")
+                                or data.get("token")
+                                or data.get("access_token")
+                                or data.get("key")
+                            )
+                            if api_key and spec.env_var_name:
+                                self.credential_store.set(
+                                    spec.env_var_name,
+                                    str(api_key),
+                                    source=f"self_registration:{spec.name}",
+                                )
+                                logger.info(
+                                    f"SkillLearner: self-registered on {spec.name}, "
+                                    f"saved {spec.env_var_name}"
+                                )
+                                return True
+                        else:
+                            body_text = await resp.text()
+                            logger.debug(
+                                f"Self-registration failed ({resp.status}): {body_text[:200]}"
+                            )
+            except Exception as e:
+                logger.debug(f"Self-registration attempt failed: {e}")
+
+        return False
 
     # ── Metadata persistence ─────────────────────────────────────────────
 

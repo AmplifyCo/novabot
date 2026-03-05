@@ -79,6 +79,17 @@ class PluginLoader:
     def __init__(self, plugins_dir: Path = None):
         self.plugins_dir = plugins_dir or PLUGINS_DIR
         self._loaded: Dict[str, PluginManifest] = {}
+        self._credential_store = None  # Injected by main.py
+
+    def set_credential_store(self, store):
+        """Inject NovaCredentialStore for self-managed credential lookup."""
+        self._credential_store = store
+
+    def _resolve_env(self, var_name: str) -> Optional[str]:
+        """Resolve env var: credential store first, then os.getenv()."""
+        if self._credential_store:
+            return self._credential_store.resolve(var_name)
+        return os.getenv(var_name)
 
     def discover(self) -> List[PluginManifest]:
         """Scan plugins directory for valid plugin subdirectories.
@@ -248,9 +259,9 @@ class PluginLoader:
           5. Register in ToolRegistry
           6. Update PolicyGate TOOL_RISK_MAP
         """
-        # Credential check (same pattern as existing _register_*_tool methods)
+        # Credential check: nova_credentials.json first, then os.getenv()
         if manifest.env_vars:
-            missing = [v for v in manifest.env_vars if not os.getenv(v)]
+            missing = [v for v in manifest.env_vars if not self._resolve_env(v)]
             if missing:
                 logger.debug(
                     f"Plugin {manifest.name} skipped (missing env: {', '.join(missing)})"
@@ -277,10 +288,10 @@ class PluginLoader:
                 logger.error(f"Plugin {manifest.name}: class {manifest.class_name} not found")
                 return False
 
-            # Build constructor kwargs from env vars
+            # Build constructor kwargs from env vars (credential store → os.getenv)
             ctor_kwargs = {}
             for param, env_var in manifest.constructor_args.items():
-                ctor_kwargs[param] = os.getenv(env_var, "")
+                ctor_kwargs[param] = self._resolve_env(env_var) or ""
 
             # Instantiate and validate
             tool = tool_class(**ctor_kwargs)

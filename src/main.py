@@ -439,12 +439,19 @@ Models: Claude Opus/Sonnet/Haiku + SmolLM2 (local fallback)"""
             conversation_manager.self_assessor = self_assessor
             logger.info("🎯 SelfAssessor initialized (quality assessment + deliberation)")
 
+            # Nova Credential Store — self-managed API keys for learned skills
+            from src.core.credential_store import NovaCredentialStore
+            credential_store = NovaCredentialStore()
+            agent.tools._plugin_loader.set_credential_store(credential_store)
+            logger.info(f"🔑 Credential store loaded ({len(credential_store.list_keys())} keys)")
+
             # Skill Acquisition (4A) — learn new tools from .md API specs
             from src.core.brain.skill_learner import SkillLearner
             _gemini_for_skills = gemini_client if 'gemini_client' in locals() else None
             skill_learner = SkillLearner(
                 gemini_client=_gemini_for_skills,
                 plugin_loader=agent.tools._plugin_loader,
+                credential_store=credential_store,
             )
             agent.tools.set_skill_learner(skill_learner)
             logger.info("🎓 SkillLearner initialized (learn new tools from .md specs)")
