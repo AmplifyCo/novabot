@@ -17,8 +17,8 @@ import aiohttp
 from src.core.tools.base import BaseTool
 from src.core.types import ToolResult
 
-from ..wallet.keystore import WalletKeystore
-from ..wallet.chains.base_chain import BaseChain
+from src.core.tools.plugins.wallet.keystore import WalletKeystore
+from src.core.tools.plugins.wallet.chains.base_chain import BaseChain
 
 logger = logging.getLogger(__name__)
 

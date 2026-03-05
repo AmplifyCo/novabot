@@ -5,9 +5,9 @@ import logging
 from src.core.tools.base import BaseTool
 from src.core.types import ToolResult
 
-from .keystore import WalletKeystore
-from .chains.base_chain import BaseChain
-from .chains.solana_chain import SolanaChain
+from src.core.tools.plugins.wallet.keystore import WalletKeystore
+from src.core.tools.plugins.wallet.chains.base_chain import BaseChain
+from src.core.tools.plugins.wallet.chains.solana_chain import SolanaChain
 
 logger = logging.getLogger(__name__)
 
