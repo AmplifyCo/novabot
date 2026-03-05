@@ -80,6 +80,10 @@ class EpisodicMemory:
     async def recall(self, query: str, n: int = 3, days_back: int = 60) -> str:
         """Retrieve relevant past episodes for context injection.
 
+        Fetches 2x candidates then re-ranks by combining semantic relevance
+        with recency and success — so yesterday's successful Moltbook registration
+        outranks last week's failed attempt even if both are semantically similar.
+
         Args:
             query: Current task / topic to search for relevant episodes
             n: Max number of episodes to return
@@ -90,7 +94,7 @@ class EpisodicMemory:
         """
         results = await self.db.search(
             query=query,
-            n_results=n,
+            n_results=n * 2,  # Fetch extra candidates for re-ranking
             filter_metadata={"type": "episode"}
         )
 
@@ -107,8 +111,35 @@ class EpisodicMemory:
         if not recent:
             return ""
 
-        lines = ["RELEVANT PAST EPISODES:"]
+        # Re-rank: recency + success boost
+        now = datetime.now()
+        scored = []
         for r in recent:
+            # Semantic score (invert L2 distance)
+            dist = r.get("distance", 1.0)
+            semantic = max(0.0, 1.0 - dist / 1.5)
+
+            # Recency score: linear decay over 5 days (120h)
+            ts_str = r.get("metadata", {}).get("timestamp", "")
+            recency = 0.0
+            if ts_str:
+                try:
+                    age_h = (now - datetime.fromisoformat(ts_str)).total_seconds() / 3600.0
+                    recency = max(0.0, 1.0 - age_h / 120.0)
+                except (ValueError, TypeError):
+                    pass
+
+            # Success bonus: successful episodes are more useful than failures
+            success_bonus = 0.1 if r.get("metadata", {}).get("success", False) else 0.0
+
+            combined = 0.6 * semantic + 0.3 * recency + 0.1 + success_bonus
+            scored.append((combined, r))
+
+        scored.sort(key=lambda x: x[0], reverse=True)
+        top = [r for _, r in scored[:n]]
+
+        lines = ["RELEVANT PAST EPISODES:"]
+        for r in top:
             lines.append(f"  {r['text'].strip()}")
 
         return "\n".join(lines)

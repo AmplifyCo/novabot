@@ -614,14 +614,17 @@ Assistant ({model_used}): {assistant_response}"""
                 logger.debug(f"Could not search contacts: {e}")
 
         # --- ISOLATED: Talent-specific memories (only current talent) ---
+        # Fetch 2x candidates, then re-rank with recency boost so recent
+        # memories (yesterday, 2 days ago) outrank stale but similar ones.
         if resolved_talent:
             try:
                 ctx = self._get_context(resolved_talent)
                 memories = await ctx.search(
-                    task, n_results=max_results,
+                    task, n_results=max_results * 2,
                     filter_metadata={"type": "conversation"},
                     distance_threshold=_RELEVANCE_THRESHOLD
                 )
+                memories = self._apply_recency_boost(memories, top_k=max_results)
                 if memories:
                     context_parts.append(f"\n## {resolved_talent.title()} Context:")
                     for mem in memories:
@@ -632,10 +635,11 @@ Assistant ({model_used}): {assistant_response}"""
             # Fallback: search legacy unified memory
             try:
                 memories = await self.memory.search(
-                    task, n_results=max_results,
+                    task, n_results=max_results * 2,
                     filter_metadata={"type": "conversation"},
                     distance_threshold=_RELEVANCE_THRESHOLD
                 )
+                memories = self._apply_recency_boost(memories, top_k=max_results)
                 if memories:
                     context_parts.append("\n## Relevant Memories:")
                     for mem in memories:
@@ -731,6 +735,62 @@ Assistant ({model_used}): {assistant_response}"""
             context_lines.append("")
 
         return "\n".join(context_lines)
+
+    # ================================================================
+    # RECENCY BOOST — prefer recent memories over stale ones
+    # ================================================================
+
+    @staticmethod
+    def _apply_recency_boost(
+        results: List[Dict[str, Any]],
+        top_k: int = 5,
+        recency_weight: float = 0.3,
+    ) -> List[Dict[str, Any]]:
+        """Re-rank search results by combining semantic distance with recency.
+
+        Without this, a semantically-close result from 30 days ago can beat
+        a slightly-less-close result from yesterday — causing Nova to recall
+        stale or outdated context (e.g. old failures instead of recent successes).
+
+        Score = (1 - recency_weight) * semantic_score + recency_weight * recency_score
+        Where recency_score decays linearly: today=1.0, 5+ days ago=0.0.
+
+        Args:
+            results: Raw vector search results (must have metadata.timestamp)
+            top_k: How many to return after re-ranking
+            recency_weight: 0.0 = pure semantic, 1.0 = pure recency
+
+        Returns:
+            Re-ranked and trimmed results list
+        """
+        if not results:
+            return results
+
+        now = datetime.now()
+        scored = []
+        for r in results:
+            # Semantic score: invert L2 distance (lower distance = better)
+            dist = r.get("distance", 1.0)
+            # Normalize: assume max useful distance is ~1.5
+            semantic_score = max(0.0, 1.0 - dist / 1.5)
+
+            # Recency score: linear decay over 5 days
+            ts_str = r.get("metadata", {}).get("timestamp", "")
+            recency_score = 0.0
+            if ts_str:
+                try:
+                    ts = datetime.fromisoformat(ts_str)
+                    age_hours = (now - ts).total_seconds() / 3600.0
+                    # 0h → 1.0, 120h (5 days) → 0.0, older → 0.0
+                    recency_score = max(0.0, 1.0 - age_hours / 120.0)
+                except (ValueError, TypeError):
+                    pass
+
+            combined = (1.0 - recency_weight) * semantic_score + recency_weight * recency_score
+            scored.append((combined, r))
+
+        scored.sort(key=lambda x: x[0], reverse=True)
+        return [r for _, r in scored[:top_k]]
 
     # ================================================================
     # CONTEXT DRIFT DETECTION

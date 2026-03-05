@@ -41,7 +41,6 @@ from src.integrations.gemini_client import GeminiClient
 from src.core.scheduler import ReminderScheduler
 from src.core.self_healing.monitor import SelfHealingMonitor
 from src.core.memory_consolidator import MemoryConsolidator
-from src.core.memory_consolidator import MemoryConsolidator
 from src.utils.memory_backup import MemoryBackup
 from src.core.brain.semantic_router import SemanticRouter
 from src.utils.daily_digest import DailyDigest
@@ -658,6 +657,7 @@ Models: Claude Opus/Sonnet/Haiku + SmolLM2 (local fallback)"""
         # Start memory consolidation background task
         memory_consolidator = MemoryConsolidator(
             digital_brain=digital_brain,
+            episodic_memory=episodic_memory,
             telegram=telegram
         )
         memory_consolidation_task = asyncio.create_task(memory_consolidator.start())

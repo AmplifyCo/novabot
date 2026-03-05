@@ -136,14 +136,17 @@ class ConversationManager:
         # In-memory conversation buffer: per-user, reliable short-term context
         # Dict[user_id, deque] — each user gets their own isolated history
         # ChromaDB semantic search is NOT chronological — these deques are.
+        # Holds last 5 days of conversations (maxlen=50 per user).
         self._conversation_buffers: Dict[str, deque] = {}
         self._current_user_id: Optional[str] = None  # Set per-request
+        self._CONVERSATION_BUFFER_MAXLEN = 50  # ~5 days of active conversation
+        self._CONVERSATION_DAYS_TO_LOAD = 5   # Load last N days on startup
 
         # Daily conversation log: persistent chronological record
         # Stored as JSONL at data/conversations/YYYY-MM-DD.jsonl
         self._conversations_dir = Path("data/conversations")
         self._conversations_dir.mkdir(parents=True, exist_ok=True)
-        self._load_todays_conversations()  # Reload buffer from today's log on startup
+        self._load_recent_conversations()  # Reload buffer from last 5 days on startup
 
         # Per-session locking: prevents concurrent processing of same user's messages
         self._session_locks: Dict[str, asyncio.Lock] = {}
@@ -202,43 +205,57 @@ class ConversationManager:
         except Exception as e:
             logger.warning(f"Failed to save daily conversation log: {e}")
 
-    def _load_todays_conversations(self):
-        """Load today's conversations from the daily log into per-user buffers.
+    def _load_recent_conversations(self):
+        """Load last N days of conversations from JSONL logs into per-user buffers.
 
-        Called on startup so context survives service restarts.
+        Called on startup so context survives service restarts and spans
+        multiple days — Nova can reference what happened yesterday or 3 days ago.
         """
         try:
-            today = datetime.now().strftime("%Y-%m-%d")
-            log_file = self._conversations_dir / f"{today}.jsonl"
-            if not log_file.exists():
-                logger.info("No conversation log for today yet")
-                return
+            today = datetime.now().date()
+            total_count = 0
+            days_loaded = 0
 
-            count = 0
-            with open(log_file, "r", encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if line:
-                        try:
-                            turn = json.loads(line)
-                            uid = turn.get("user_id", "default")
-                            if uid not in self._conversation_buffers:
-                                self._conversation_buffers[uid] = deque(maxlen=15)
-                            self._conversation_buffers[uid].append(turn)
-                            count += 1
-                        except json.JSONDecodeError:
-                            continue
+            # Load oldest-first so deque keeps the most recent turns
+            for days_ago in range(self._CONVERSATION_DAYS_TO_LOAD - 1, -1, -1):
+                target_date = today - timedelta(days=days_ago)
+                log_file = self._conversations_dir / f"{target_date.isoformat()}.jsonl"
+                if not log_file.exists():
+                    continue
 
-            # Restore last bot response per-user from today's conversation buffers
+                day_count = 0
+                with open(log_file, "r", encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if line:
+                            try:
+                                turn = json.loads(line)
+                                uid = turn.get("user_id", "default")
+                                if uid not in self._conversation_buffers:
+                                    self._conversation_buffers[uid] = deque(
+                                        maxlen=self._CONVERSATION_BUFFER_MAXLEN
+                                    )
+                                self._conversation_buffers[uid].append(turn)
+                                day_count += 1
+                            except json.JSONDecodeError:
+                                continue
+                if day_count:
+                    days_loaded += 1
+                    total_count += day_count
+
+            # Restore last bot response per-user from the loaded buffers
             for uid, buf in self._conversation_buffers.items():
                 if buf:
                     last_response = buf[-1].get("assistant_response")
                     if last_response:
                         self._last_bot_responses[uid] = last_response
 
-            logger.info(f"Loaded {count} conversation turns for {len(self._conversation_buffers)} user(s) from today's log")
+            logger.info(
+                f"Loaded {total_count} conversation turns for "
+                f"{len(self._conversation_buffers)} user(s) from {days_loaded} day(s)"
+            )
         except Exception as e:
-            logger.warning(f"Failed to load today's conversations: {e}")
+            logger.warning(f"Failed to load recent conversations: {e}")
 
     def switch_brain_mode(self, mode: str):
         """Switch between CoreBrain (build) and DigitalCloneBrain (assistant).
@@ -497,7 +514,7 @@ class ConversationManager:
 
             # Save to in-memory buffer + daily log (for post-call report)
             if user_id not in self._conversation_buffers:
-                self._conversation_buffers[user_id] = deque(maxlen=15)
+                self._conversation_buffers[user_id] = deque(maxlen=self._CONVERSATION_BUFFER_MAXLEN)
 
             turn = {
                 "user_message": message[:500],
@@ -708,7 +725,7 @@ class ConversationManager:
             # In-memory buffer: per-user, instant, reliable short-term context
             buffer_key = user_id or channel or "default"
             if buffer_key not in self._conversation_buffers:
-                self._conversation_buffers[buffer_key] = deque(maxlen=15)
+                self._conversation_buffers[buffer_key] = deque(maxlen=self._CONVERSATION_BUFFER_MAXLEN)
 
             turn = {
                 "user_message": message,
