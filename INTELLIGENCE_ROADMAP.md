@@ -99,6 +99,86 @@ Weekly: "23 requests handled, 3 corrections received (all about tone), approval 
 
 ---
 
+## Phase 5: Agent Economy — From Assistant to Autonomous Operator
+*Nova participates in the agent world — discovers tools, collaborates with agents, takes on work*
+
+### 5A. MCP Client (Tool Universe)
+Nova consumes any MCP-compatible tool server. Instead of hand-coding each integration, Nova discovers tools from the MCP Registry (~2,000+ servers) and connects on demand.
+- MCP client adapter in Nova's tool layer
+- Dynamic tool discovery: "find me a tool that can do X" → search MCP Registry → connect → use
+- Auth handling: API keys, OAuth flows per MCP server spec
+- Caching: tool schemas cached locally, refreshed on demand
+**Protocols**: MCP (JSON-RPC 2.0), MCP Registry API
+**Impact**: Nova goes from ~15 hand-built tools to thousands, instantly
+
+### 5B. Agent Identity & Discovery
+Nova publishes an Agent Card (A2A spec) so other agents and platforms can discover it.
+- `/.well-known/agent-card.json` — Nova's capabilities, skills, auth requirements
+- Identity: name, description, capabilities list, supported protocols, contact endpoint
+- Reputation: linked Moltbook profile, task completion stats, specializations
+- Cryptographically signed for trust verification
+**Protocols**: A2A Agent Cards, W3C DIDs (future)
+**Impact**: Nova becomes discoverable — other agents can find and delegate to it
+
+### 5C. Agent Collaboration & Delegation (Orchestrator Mode)
+Nova becomes a **delegation-first orchestrator**. When work comes in, Nova evaluates: "Should I do this myself, or is there a better agent for this subtask?"
+- **Agent Discovery**: Find specialized agents via A2A Agent Cards, Moltbook network, MCP Registry
+- **Capability Matching**: Match subtask requirements against known agent capabilities (skills, cost, reliability, speed)
+- **Task Delegation**: Send subtasks to external agents via A2A Protocol (stateful tasks with lifecycle: Working → Completed/Failed)
+- **Parallel Orchestration**: Multiple agents working simultaneously on different subtasks, Nova monitors and merges results
+- **Quality Gate**: Nova reviews delegated results before delivering to user — reject and retry/reassign if quality is low
+- **Cost Optimization**: Track agent costs (tokens, ETH, API calls) and prefer efficient agents for routine work
+- **Fallback**: If delegated agent fails or times out, Nova picks up the work itself
+
+Example flow:
+```
+User: "Research AI agent frameworks, write a comparison post for LinkedIn, and tweet the key takeaway"
+Nova (orchestrator):
+  ├─ Subtask 1: Research → delegate to a research-specialist agent (via A2A)
+  ├─ Subtask 2: Wait for research → Write LinkedIn post (Nova does this — it knows Srinath's voice)
+  ├─ Subtask 3: Extract takeaway → Write tweet (Nova does this — voice-specific)
+  └─ Quality gate: CriticAgent reviews both drafts → schedule posts
+```
+
+Another example:
+```
+User: "Audit this smart contract for vulnerabilities"
+Nova (orchestrator):
+  ├─ Discovers 3 code-audit agents on Moltlaunch
+  ├─ Sends contract to top-rated agent
+  ├─ Monitors progress via A2A task status
+  ├─ Receives results, summarizes for Srinath
+  └─ If results are thin, assigns to second agent for cross-check
+```
+
+**Architecture**:
+- `brain/agent_broker.py` — discovers, ranks, and selects agents for subtasks
+- `brain/delegation_engine.py` — A2A task lifecycle management (create, monitor, collect, retry)
+- Extends existing GoalDecomposer: subtasks now get `execution_mode: self | delegate`
+- Extends TaskRunner: delegate-mode subtasks sent to external agents instead of local agent loop
+**Protocols**: A2A (task management), MCP (tool sharing), Moltbook API (social discovery)
+**Impact**: Nova's throughput multiplies — it manages a team instead of doing everything alone
+
+### 5D. Marketplace Participation
+Nova takes paid work from agent marketplaces and job boards.
+- **Moltlaunch integration**: Browse available gigs, bid on matching ones, execute, get paid (ETH on Base)
+- **Job matching**: Compare job requirements against Nova's capabilities + delegatable skills
+- **Execution pipeline**: Accept job → decompose → self-execute or delegate → deliver → collect payment
+- **Reputation building**: Completed jobs build on-chain reputation, unlocking higher-value work
+- **Revenue tracking**: Dashboard of jobs completed, earnings, time spent, delegation costs
+**Protocols**: Moltlaunch API, ERC-8004 (agent identity on Ethereum)
+**Impact**: Nova becomes revenue-generating — not just an assistant, but an autonomous economic agent
+
+### 5E. Agent Network & Alliances
+Nova builds a trusted network of specialist agents it works with repeatedly.
+- **Agent Rolodex**: Track known agents with reliability scores, specializations, response times, costs
+- **Preferred partners**: Agents that consistently deliver quality become preferred for future delegation
+- **Reciprocal work**: Accept delegated subtasks from other agents (Nova is strong at content, communication, research)
+- **Alliance formation**: Informal agent teams that frequently collaborate on complex multi-agent jobs
+**Impact**: Nova has a "professional network" — like a freelancer with trusted subcontractors
+
+---
+
 ## Summary
 
 | Phase | Theme | Nova Feels Like... | Key Shift |
@@ -107,3 +187,4 @@ Weekly: "23 requests handled, 3 corrections received (all about tone), approval 
 | 2     | Anticipatory | "It knows what I need" | React to Predict |
 | 3     | Reasoning | "It thinks for itself" | Execute to Judge |
 | 4     | Autonomous Growth | "It's getting better" | Static to Evolving |
+| 5     | Agent Economy | "It operates in the world" | Assistant to Autonomous Operator |
