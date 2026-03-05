@@ -271,7 +271,11 @@ class AttentionEngine:
         key = observation[:50].lower()
         if key in log:
             sent_at = datetime.fromisoformat(log[key])
-            if tz_now() - sent_at < timedelta(hours=24):
+            now = tz_now()
+            # Ensure both are aware or both naive for comparison
+            if sent_at.tzinfo is None:
+                sent_at = sent_at.replace(tzinfo=now.tzinfo)
+            if now - sent_at < timedelta(hours=24):
                 return True
         return False
 
