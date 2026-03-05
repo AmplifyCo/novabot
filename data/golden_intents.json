@@ -206,5 +206,21 @@
       "contacts",
       "whatsapp"
     ]
+  },
+  {
+    "intent": "action",
+    "examples": [
+      "check moltbook status",
+      "what's happening on moltbook",
+      "post on moltbook",
+      "post a quote on moltbook",
+      "check moltbook feed",
+      "browse moltbook",
+      "what's trending on moltbook",
+      "post something on moltbook introductions"
+    ],
+    "tools": [
+      "moltbook"
+    ]
   }
 ]

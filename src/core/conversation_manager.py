@@ -4077,7 +4077,7 @@ SECURITY OVERRIDE:
             uptime_str = f"{uptime.seconds // 3600}h {(uptime.seconds % 3600) // 60}m" if uptime else "Unknown"
 
             status_parts = [
-                "🤖 **Digital Twin Status**\n",
+                f"🤖 **{self.bot_name} Status**\n",
                 f"**Uptime:** {uptime_str}",
                 f"**Model:** {self.agent.config.default_model}",
                 f"**Last Model Used:** {self._last_model_used}",
