@@ -1,8 +1,14 @@
-"""Wallet plugin — multi-chain crypto wallet for Base and Solana USDC."""
+"""Wallet plugin — multi-chain crypto wallet for Base and Solana USDC.
 
+All transfers require explicit owner approval via confirmation code.
+"""
+
+import asyncio
 import logging
 import os
+import secrets
 import time
+from typing import Dict, Optional, Tuple
 
 from src.core.tools.base import BaseTool
 from src.core.types import ToolResult
@@ -18,7 +24,9 @@ SUPPORTED_CHAINS = ("base", "solana")
 # Spending limits — configurable via env vars
 MAX_SEND_PER_TX = float(os.getenv("WALLET_MAX_PER_TX", "10"))       # Max USDC per single send
 MAX_SEND_PER_DAY = float(os.getenv("WALLET_MAX_PER_DAY", "50"))     # Max USDC per 24h window
-OWNER_ADDRESS = os.getenv("WALLET_OWNER_ADDRESS", "")                # Whitelisted owner address (unlimited)
+
+# Approval expiry — pending transfers expire after this many seconds
+APPROVAL_EXPIRY_SECONDS = 300  # 5 minutes
 
 
 class WalletTool(BaseTool):
@@ -28,14 +36,15 @@ class WalletTool(BaseTool):
     description = (
         "Crypto wallet for Base and Solana chains. "
         "Operations: generate (create keypair), address (show address), "
-        "balance (check ETH/SOL + USDC), send (transfer USDC), "
+        "balance (check ETH/SOL + USDC), send (request USDC transfer — requires owner approval), "
+        "confirm_send (execute a previously approved transfer), "
         "sign (sign a message), tx_status (check transaction)."
     )
     parameters = {
         "operation": {
             "type": "string",
             "description": "Wallet operation to perform",
-            "enum": ["generate", "address", "balance", "send", "sign", "tx_status"],
+            "enum": ["generate", "address", "balance", "send", "confirm_send", "sign", "tx_status"],
         },
         "chain": {
             "type": "string",
@@ -58,6 +67,10 @@ class WalletTool(BaseTool):
             "type": "string",
             "description": "Transaction hash to check (required for 'tx_status')",
         },
+        "approval_code": {
+            "type": "string",
+            "description": "6-digit approval code from owner (required for 'confirm_send')",
+        },
     }
 
     def __init__(self, encryption_key: str = ""):
@@ -70,6 +83,8 @@ class WalletTool(BaseTool):
         self._solana = SolanaChain()
         # Spending tracker: list of (timestamp, amount) for rolling 24h window
         self._spend_log: list = []
+        # Pending transfers awaiting owner approval: {code: {chain, to, amount, created_at}}
+        self._pending_transfers: Dict[str, dict] = {}
 
     def _chain_adapter(self, chain: str):
         if chain == "base":
@@ -82,7 +97,7 @@ class WalletTool(BaseTool):
         if not self._keystore:
             return ToolResult(success=False, error="Wallet not configured — set WALLET_ENCRYPTION_KEY")
 
-        if chain not in SUPPORTED_CHAINS:
+        if operation not in ("confirm_send",) and chain not in SUPPORTED_CHAINS:
             return ToolResult(success=False, error=f"Unsupported chain: {chain}. Use: {SUPPORTED_CHAINS}")
 
         try:
@@ -93,7 +108,9 @@ class WalletTool(BaseTool):
             elif operation == "balance":
                 return await self._balance(chain)
             elif operation == "send":
-                return await self._send(chain, kwargs.get("to", ""), kwargs.get("amount", 0))
+                return await self._request_send(chain, kwargs.get("to", ""), kwargs.get("amount", 0))
+            elif operation == "confirm_send":
+                return await self._confirm_send(kwargs.get("approval_code", ""))
             elif operation == "sign":
                 return await self._sign(chain, kwargs.get("message", ""))
             elif operation == "tx_status":
@@ -165,7 +182,8 @@ class WalletTool(BaseTool):
 
         return ""
 
-    async def _send(self, chain: str, to: str, amount: float) -> ToolResult:
+    async def _request_send(self, chain: str, to: str, amount: float) -> ToolResult:
+        """Request a transfer — creates pending approval and notifies owner via Telegram."""
         if not to:
             return ToolResult(success=False, error="Missing 'to' address")
         if not amount or amount <= 0:
@@ -181,18 +199,114 @@ class WalletTool(BaseTool):
         if not private_key:
             return ToolResult(success=False, error=f"No {chain} wallet. Generate one first.")
 
+        # Clean expired pending transfers
+        now = time.time()
+        self._pending_transfers = {
+            code: info for code, info in self._pending_transfers.items()
+            if now - info["created_at"] < APPROVAL_EXPIRY_SECONDS
+        }
+
+        # Generate 6-digit approval code
+        code = secrets.token_hex(3).upper()  # e.g., "A3F1B2"
+
+        self._pending_transfers[code] = {
+            "chain": chain,
+            "to": to,
+            "amount": amount,
+            "created_at": now,
+        }
+
+        logger.info(f"Wallet transfer pending approval: {amount} USDC on {chain} to {to} (code: {code})")
+
+        # Notify owner via Telegram
+        await self._notify_owner_approval(chain, to, amount, code)
+
+        return ToolResult(
+            success=True,
+            output=(
+                f"Transfer requires owner approval.\n"
+                f"Requested: {amount} USDC on {chain} to {to}\n"
+                f"Approval code sent to owner via Telegram.\n"
+                f"Owner must reply with the code to confirm (expires in 5 minutes)."
+            ),
+            metadata={"pending": True, "chain": chain, "to": to, "amount": amount},
+        )
+
+    async def _confirm_send(self, approval_code: str) -> ToolResult:
+        """Execute a previously approved transfer using the approval code."""
+        if not approval_code:
+            return ToolResult(success=False, error="Missing 'approval_code'")
+
+        code = approval_code.strip().upper()
+
+        # Look up pending transfer
+        info = self._pending_transfers.get(code)
+        if not info:
+            return ToolResult(
+                success=False,
+                error="Invalid or expired approval code. Request a new transfer.",
+            )
+
+        # Check expiry
+        if time.time() - info["created_at"] > APPROVAL_EXPIRY_SECONDS:
+            del self._pending_transfers[code]
+            return ToolResult(success=False, error="Approval code expired. Request a new transfer.")
+
+        chain = info["chain"]
+        to = info["to"]
+        amount = info["amount"]
+
+        # Remove from pending (one-time use)
+        del self._pending_transfers[code]
+
+        # Execute the transfer
+        private_key = self._keystore.get_private_key(chain)
+        if not private_key:
+            return ToolResult(success=False, error=f"No {chain} wallet.")
+
         adapter = self._chain_adapter(chain)
         tx_hash = await adapter.send_usdc(private_key, to, amount)
 
         # Record spend
         self._spend_log.append((time.time(), amount))
-        logger.info(f"Wallet sent {amount} USDC on {chain} to {to} (tx: {tx_hash})")
+        logger.info(f"Wallet APPROVED send: {amount} USDC on {chain} to {to} (tx: {tx_hash})")
 
         return ToolResult(
             success=True,
-            output=f"Sent {amount} USDC on {chain} to {to}\nTransaction: {tx_hash}",
+            output=f"Transfer approved and executed.\nSent {amount} USDC on {chain} to {to}\nTransaction: {tx_hash}",
             metadata={"chain": chain, "tx_hash": tx_hash, "amount": amount, "to": to},
         )
+
+    async def _notify_owner_approval(self, chain: str, to: str, amount: float, code: str):
+        """Send approval request to owner via Telegram."""
+        bot_token = os.getenv("TELEGRAM_BOT_TOKEN", "")
+        chat_id = os.getenv("TELEGRAM_CHAT_ID", "")
+
+        if not bot_token or not chat_id:
+            logger.warning("Cannot send approval request — TELEGRAM_BOT_TOKEN/CHAT_ID not set")
+            return
+
+        message = (
+            f"💰 WALLET TRANSFER APPROVAL REQUIRED\n\n"
+            f"Amount: {amount} USDC\n"
+            f"Chain: {chain}\n"
+            f"To: {to}\n\n"
+            f"Approval code: {code}\n\n"
+            f"To approve, reply: approve {code}\n"
+            f"Expires in 5 minutes. Ignore to deny."
+        )
+
+        try:
+            import aiohttp
+            url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+            async with aiohttp.ClientSession() as session:
+                await session.post(url, json={
+                    "chat_id": chat_id,
+                    "text": message,
+                })
+            logger.info(f"Approval request sent to Telegram for {amount} USDC transfer")
+        except Exception as e:
+            logger.error(f"Failed to send Telegram approval request: {e}")
 
     async def _sign(self, chain: str, message: str) -> ToolResult:
         if not message:
