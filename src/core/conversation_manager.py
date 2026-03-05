@@ -2560,7 +2560,7 @@ Examples:
     # ── Phase 4A: Skill Learning ─────────────────────────────────────────
 
     _SKILL_LEARN_PATTERN = re.compile(
-        r'(?:learn\s+(?:this\s+)?(?:skill|api)|/learn)\s*:?\s*(https://\S+\.(?:md|json))\b'
+        r'(?:learn\s+(?:from\s+)?(?:this\s+)?(?:skill|api|spec)|/learn)\s*:?\s*(https://\S+\.(?:md|json))\b'
         r'(.*)?',
         re.IGNORECASE,
     )
@@ -2583,7 +2583,7 @@ Examples:
             return None
 
         url = match.group(1)
-        instructions = (match.group(2) or "").strip()  # Everything after URL
+        instructions = (match.group(2) or "").strip().lstrip(",;").strip()  # Everything after URL
         skill_tool = self.agent.tools.get_tool("learn_skill") if hasattr(self.agent, 'tools') else None
         if not skill_tool or not getattr(skill_tool, 'skill_learner', None):
             return "Skill learning is not available."
