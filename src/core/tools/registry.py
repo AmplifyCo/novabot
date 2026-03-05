@@ -98,6 +98,12 @@ class ToolRegistry:
         self._plugin_loader = PluginLoader()
         self._plugin_loader.load_all(self)
 
+        # ── MCP Server Tools (Phase 5A) ──────────────────────────────────
+        # Config-driven: define servers in config/mcp_servers.json.
+        # Discovery is async — called from main.py after init.
+        from .mcp.mcp_server_manager import MCPServerManager
+        self._mcp_manager = MCPServerManager()
+
     def register(self, tool: BaseTool):
         """Register a tool.
 
@@ -566,14 +572,17 @@ class ToolRegistry:
             logger.info("🎓 SkillTool connected to SkillLearner")
 
     def get_plugin_metadata(self) -> dict:
-        """Return metadata for all loaded plugins.
+        """Return metadata for all loaded plugins + MCP tools.
 
         Used by ConversationManager (dynamic _SAFE_READONLY_TOOLS),
         GoalDecomposer (dynamic _VALID_TOOL_NAMES), and persona detection.
         """
+        meta = {}
         if hasattr(self, '_plugin_loader'):
-            return self._plugin_loader.get_plugin_metadata()
-        return {}
+            meta.update(self._plugin_loader.get_plugin_metadata())
+        if hasattr(self, '_mcp_manager'):
+            meta.update(self._mcp_manager.get_metadata())
+        return meta
 
     async def reload_plugins(self) -> str:
         """Hot-reload all plugins: hold new tasks, drain in-flight, reload.
@@ -615,7 +624,60 @@ class ToolRegistry:
         summary = f"Plugins: {', '.join(parts)}."
         if errors:
             summary += f" Errors: {'; '.join(errors)}"
+
+        # Also reload MCP servers
+        if hasattr(self, '_mcp_manager'):
+            mcp_summary = await self.reload_mcp_servers()
+            summary += f" {mcp_summary}"
+
         return summary
+
+    # ── MCP Server Management (Phase 5A) ────────────────────────────────
+
+    async def discover_mcp_servers(self) -> str:
+        """Discover and register MCP server tools. Called from main.py after init."""
+        if not hasattr(self, '_mcp_manager'):
+            return "MCP system not initialized."
+        tools_count, errors = await self._mcp_manager.discover_and_register(self)
+        parts = [f"{tools_count} MCP tool(s) registered"]
+        if errors:
+            parts.append(f"errors: {'; '.join(errors)}")
+        summary = ". ".join(parts)
+        logger.info(f"MCP discovery: {summary}")
+        return summary
+
+    async def reload_mcp_servers(self) -> str:
+        """Hot-reload MCP servers: re-read config, reconnect, re-register."""
+        if not hasattr(self, '_mcp_manager'):
+            return "MCP: not initialized."
+        new_tools, removed, errors = await self._mcp_manager.reload(self)
+        parts = []
+        if new_tools:
+            parts.append(f"{new_tools} registered")
+        if removed:
+            parts.append(f"{removed} removed")
+        if not parts:
+            parts.append("no changes")
+        summary = f"MCP: {', '.join(parts)}."
+        if errors:
+            summary += f" Errors: {'; '.join(errors)}"
+        return summary
+
+    async def shutdown_mcp(self):
+        """Clean shutdown of all MCP connections."""
+        if hasattr(self, '_mcp_manager'):
+            await self._mcp_manager.shutdown()
+
+    def set_mcp_credential_resolver(self, resolver):
+        """Inject credential resolver into MCP manager (called from main.py)."""
+        if hasattr(self, '_mcp_manager'):
+            self._mcp_manager._credential_resolver = resolver
+
+    def get_mcp_status(self) -> dict:
+        """Get MCP server connection status (for debug/dashboard)."""
+        if hasattr(self, '_mcp_manager'):
+            return self._mcp_manager.get_status()
+        return {}
 
     def set_task_queue(self, task_queue):
         """Inject task_queue into NovaTaskTool after initialization."""

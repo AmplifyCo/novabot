@@ -463,6 +463,11 @@ Models: Claude Opus/Sonnet/Haiku + SmolLM2 (local fallback)"""
             agent.tools.set_skill_learner(skill_learner)
             logger.info("🎓 SkillLearner initialized (learn new tools from .md specs)")
 
+            # MCP Server Tools (Phase 5A) — config-driven, auto-discovered
+            agent.tools.set_mcp_credential_resolver(credential_store.resolve)
+            mcp_summary = await agent.tools.discover_mcp_servers()
+            logger.info(f"🔌 MCP: {mcp_summary}")
+
             # Restore timezone override from working memory (persists across restarts)
             if working_memory.timezone_override:
                 tz_override = working_memory.timezone_override
@@ -726,6 +731,9 @@ Models: Claude Opus/Sonnet/Haiku + SmolLM2 (local fallback)"""
                 attention_task.cancel()
             if 'pattern_task' in locals() and pattern_task:
                 pattern_task.cancel()
+            # Shutdown MCP server connections
+            if hasattr(agent.tools, 'shutdown_mcp'):
+                await agent.tools.shutdown_mcp()
             await telegram.notify("Agent shutting down", level="warning")
 
     except Exception as e:

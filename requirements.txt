@@ -42,6 +42,9 @@ pyyaml>=6.0.1
 psutil>=5.9.7
 structlog>=24.1.0
 
+# MCP (Model Context Protocol) client — consume any MCP tool server
+mcp>=1.7.0
+
 # Social Media Tools (X/Twitter OAuth 1.0a)
 requests-oauthlib>=1.3.1
 
