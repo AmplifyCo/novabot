@@ -358,18 +358,24 @@ class SkillLearner:
 
         try:
             resp = await asyncio.wait_for(
-                self.llm.generate(
-                    prompt=prompt,
-                    system_prompt="You are an API spec analyzer. Output only valid JSON.",
+                self.llm.create_message(
+                    model="gemini/gemini-2.0-flash",
+                    messages=[{"role": "user", "content": prompt}],
+                    system="You are an API spec analyzer. Output only valid JSON.",
                     max_tokens=2000,
                 ),
                 timeout=15.0,
             )
             text = ""
-            if isinstance(resp, str):
+            if hasattr(resp, 'content') and resp.content:
+                for block in resp.content:
+                    if hasattr(block, 'text'):
+                        text += block.text
+            elif isinstance(resp, str):
                 text = resp.strip()
             elif isinstance(resp, dict):
                 text = resp.get("text", "").strip()
+            text = text.strip()
 
             # Strip markdown fences
             text = text.replace("```json", "").replace("```", "").strip()
@@ -435,9 +441,10 @@ class SkillLearner:
 
         try:
             resp = await asyncio.wait_for(
-                self.llm.generate(
-                    prompt=prompt,
-                    system_prompt=(
+                self.llm.create_message(
+                    model="gemini/gemini-2.0-flash",
+                    messages=[{"role": "user", "content": prompt}],
+                    system=(
                         "You are a Python code generator for the Nova bot plugin system. "
                         "Output only code and JSON, no explanations."
                     ),
@@ -446,10 +453,15 @@ class SkillLearner:
                 timeout=30.0,
             )
             text = ""
-            if isinstance(resp, str):
+            if hasattr(resp, 'content') and resp.content:
+                for block in resp.content:
+                    if hasattr(block, 'text'):
+                        text += block.text
+            elif isinstance(resp, str):
                 text = resp.strip()
             elif isinstance(resp, dict):
                 text = resp.get("text", "").strip()
+            text = text.strip()
 
             # Split on manifest marker
             if "---MANIFEST---" not in text:
