@@ -159,15 +159,30 @@ Nova (orchestrator):
 **Protocols**: A2A (task management), MCP (tool sharing), Moltbook API (social discovery)
 **Impact**: Nova's throughput multiplies — it manages a team instead of doing everything alone
 
-### 5D. Marketplace Participation
-Nova takes paid work from agent marketplaces and job boards.
-- **Moltlaunch integration**: Browse available gigs, bid on matching ones, execute, get paid (ETH on Base)
+### 5D. Marketplace & Payments (Agent Treasury)
+Nova takes paid work and manages money like a CXO with a project budget — never fronts its own capital.
+
+**Payment flow:**
+```
+1. Client posts job (USDC/ETH locked in escrow)
+2. Nova bids → client accepts → escrow funds the project
+3. Nova decomposes work:
+   ├─ Self-execute (free — Nova's own compute)
+   ├─ Delegate subtask A → pay Agent X from project budget (x402 / USDC)
+   └─ Delegate subtask B → pay Agent Y from project budget
+4. Nova delivers final result → client approves → escrow releases
+5. Revenue = client payment − sub-agent costs − gas fees
+```
+
+- **Wallet**: Base (Moltlaunch, Stripe x402) + Solana (broader agent economy). USDC as default currency.
+- **x402 client**: HTTP 402 auto-pay for APIs and agent services — agent requests resource, gets payment request, signs USDC, access granted. No human in the loop.
+- **Budget management**: Before accepting a job, Nova estimates sub-agent costs and only bids if margin is positive. Tracks spend per subtask.
+- **Moltlaunch integration**: Browse gigs, bid, execute, collect ETH. ERC-8004 on-chain identity + reputation.
 - **Job matching**: Compare job requirements against Nova's capabilities + delegatable skills
-- **Execution pipeline**: Accept job → decompose → self-execute or delegate → deliver → collect payment
 - **Reputation building**: Completed jobs build on-chain reputation, unlocking higher-value work
-- **Revenue tracking**: Dashboard of jobs completed, earnings, time spent, delegation costs
-**Protocols**: Moltlaunch API, ERC-8004 (agent identity on Ethereum)
-**Impact**: Nova becomes revenue-generating — not just an assistant, but an autonomous economic agent
+- **Revenue dashboard**: Jobs completed, gross earnings, delegation costs, net profit, wallet balances
+**Protocols**: x402 (HTTP-native payments), Moltlaunch API, ERC-8004 (agent identity on Base), Stripe Agentic Wallets
+**Impact**: Nova becomes revenue-generating — earns by orchestrating, not just executing
 
 ### 5E. Agent Network & Alliances
 Nova builds a trusted network of specialist agents it works with repeatedly.
