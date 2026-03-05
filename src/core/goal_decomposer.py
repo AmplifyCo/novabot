@@ -38,6 +38,18 @@ RULES:
 7. Assign model_tier: "flash" for searches/reads, "sonnet" for synthesis/writing
 8. For each subtask set verification_criteria: a one-sentence test for how to confirm it succeeded (e.g. "Search returns ≥3 results", "File exists at path", "Tweet ID is returned")
 9. Set reversible: false for subtasks that CANNOT be undone (sending email, posting to X, deleting files, making purchases). Set true for reads, searches, writes to local files.
+10. EISENHOWER PRIORITY: Classify each subtask into a quadrant:
+    - "q1" (DO) — urgent + important: identity-bound, security-sensitive, time-critical → execution_mode: "self"
+    - "q2" (SCHEDULE) — important but not urgent: voice/brand work, synthesis, quality review → execution_mode: "self"
+    - "q3" (DELEGATE) — urgent but routine: research, data gathering, bulk analysis → execution_mode: "delegate"
+    - "q4" (ELIMINATE/DELEGATE) — neither urgent nor important: boilerplate, generic lookups → execution_mode: "delegate" or skip
+
+    SELF-EXECUTE when: needs owner's voice/tone, uses identity tools (email, linkedin, calendar, contacts), is the final synthesis step, or is a quality review.
+    DELEGATE when: commodity research, specialized analysis we can't do better, parallelizable grunt work, no identity needed.
+11. If execution_mode is "delegate", set delegate_to with an agent name from Available Agents below.
+    If no suitable agent exists, set execution_mode: "self" (we do it ourselves).
+
+Available Agents: {agents}
 
 Available Tools: {tools}{tool_performance}
 
@@ -46,10 +58,10 @@ Goal: {goal}
 Respond ONLY with a JSON array. No explanation, no markdown fences.
 Example format (step 0 first, then steps 1+2 run in parallel, step 3 waits for both):
 [
-  {{"description": "Search X for posts about OpenClaw", "tool_hints": ["x_tool"], "model_tier": "flash", "verification_criteria": "At least 3 relevant tweets returned", "reversible": true, "depends_on": []}},
-  {{"description": "Search web for 'OpenClaw reviews 2025'", "tool_hints": ["web_search"], "model_tier": "flash", "verification_criteria": "Search returns relevant results", "reversible": true, "depends_on": [0]}},
-  {{"description": "Fetch the OpenClaw GitHub README", "tool_hints": ["web_fetch"], "model_tier": "flash", "verification_criteria": "Page content contains README text", "reversible": true, "depends_on": [0]}},
-  {{"description": "Compile all findings into ./data/tasks/{task_id}.txt with summary", "tool_hints": ["file_operations"], "model_tier": "sonnet", "verification_criteria": "File exists at ./data/tasks/{task_id}.txt with content", "reversible": true, "depends_on": [1, 2]}}
+  {{"description": "Search X for posts about OpenClaw", "tool_hints": ["x_tool"], "model_tier": "flash", "verification_criteria": "At least 3 relevant tweets returned", "reversible": true, "depends_on": [], "execution_mode": "self", "delegate_to": "", "priority": "q2"}},
+  {{"description": "Search web for 'OpenClaw reviews 2025'", "tool_hints": ["web_search"], "model_tier": "flash", "verification_criteria": "Search returns relevant results", "reversible": true, "depends_on": [0], "execution_mode": "delegate", "delegate_to": "research-bot", "priority": "q3"}},
+  {{"description": "Fetch the OpenClaw GitHub README", "tool_hints": ["web_fetch"], "model_tier": "flash", "verification_criteria": "Page content contains README text", "reversible": true, "depends_on": [0], "execution_mode": "delegate", "delegate_to": "research-bot", "priority": "q3"}},
+  {{"description": "Compile all findings into ./data/tasks/{task_id}.txt with summary", "tool_hints": ["file_operations"], "model_tier": "sonnet", "verification_criteria": "File exists at ./data/tasks/{task_id}.txt with content", "reversible": true, "depends_on": [1, 2], "execution_mode": "self", "delegate_to": "", "priority": "q2"}}
 ]"""
 
 # Fallback decomposition used when Gemini Flash is unavailable (built in _make_fallback)
@@ -61,16 +73,18 @@ class GoalDecomposer:
     Falls back gracefully to a 2-step default if Gemini is unavailable.
     """
 
-    def __init__(self, gemini_client=None, template_library=None, extra_tool_names=None):
+    def __init__(self, gemini_client=None, template_library=None, extra_tool_names=None, agent_broker=None):
         """
         Args:
             gemini_client: GeminiClient (LiteLLM wrapper). If None, uses fallback decomposition.
             template_library: ReasoningTemplateLibrary for reusing past decompositions.
             extra_tool_names: Additional tool names from plugins (auto-discovered).
+            agent_broker: AgentBroker for listing available external agents in the planner prompt.
         """
         self._extra_tool_names = set(extra_tool_names or [])
         self.gemini_client = gemini_client
         self.template_library = template_library
+        self.agent_broker = agent_broker
         self._model = "gemini/gemini-2.0-flash"
 
     async def decompose(
@@ -120,12 +134,18 @@ class GoalDecomposer:
             if perf_lines:
                 tool_perf_str = "\n\nTool Performance (from past experience):\n" + "\n".join(perf_lines) + "\nPrefer reliable tools where possible."
 
+        # Build available agents list for delegation decisions
+        agents_str = "None (execute all steps locally)"
+        if self.agent_broker:
+            agents_str = self.agent_broker.get_agents_for_prompt()
+
         prompt = _DECOMPOSE_PROMPT.format(
             bot_name=_BOT_NAME,
             tools=tools_str,
             goal=goal,
             task_id=task_id,
             tool_performance=tool_perf_str,
+            agents=agents_str,
         )
         if template_context:
             prompt = template_context + "\n" + prompt
@@ -202,6 +222,15 @@ class GoalDecomposer:
                 tier = item.get("model_tier", "flash")
                 if tier not in self._VALID_MODEL_TIERS:
                     tier = "flash"
+                # Eisenhower delegation fields
+                exec_mode = item.get("execution_mode", "self")
+                if exec_mode not in ("self", "delegate"):
+                    exec_mode = "self"
+                delegate_to = item.get("delegate_to", "") if exec_mode == "delegate" else ""
+                priority = item.get("priority", "q2")
+                if priority not in ("q1", "q2", "q3", "q4"):
+                    priority = "q2"
+
                 subtasks.append(Subtask(
                     description=desc,
                     tool_hints=valid_hints,
@@ -210,6 +239,9 @@ class GoalDecomposer:
                     verification_criteria=item.get("verification_criteria", "")[:200],
                     reversible=item.get("reversible", True),
                     depends_on=item.get("depends_on", []),
+                    execution_mode=exec_mode,
+                    delegate_to=delegate_to,
+                    priority=priority,
                 ))
 
             # Ensure synthesis step mentions the task_id file path

@@ -558,6 +558,12 @@ Models: Claude Opus/Sonnet/Haiku + SmolLM2 (local fallback)"""
                 dashboard.set_agent_card_builder(_a2a_card)
                 dashboard.set_a2a_handler(_a2a_handler)
                 logger.info("🤝 A2A: Agent card + endpoint wired")
+
+                # Agent Broker (delegation to external agents)
+                from src.a2a.broker import AgentBroker
+                _credential_resolver = credential_store.resolve if 'credential_store' in locals() and hasattr(credential_store, 'resolve') else None
+                _agent_broker = AgentBroker(credential_resolver=_credential_resolver)
+                logger.info(f"🤝 A2A: Agent Broker loaded ({len(_agent_broker._agents)} known agents)")
             except Exception as e:
                 logger.warning(f"A2A setup skipped: {e}")
 
@@ -588,6 +594,11 @@ Models: Claude Opus/Sonnet/Haiku + SmolLM2 (local fallback)"""
 
             # Use first of WHATSAPP_ALLOWED_NUMBERS as owner's fallback notification address
             _owner_wa = (config.whatsapp_allowed_numbers or [""])[0] if config.whatsapp_allowed_numbers else ""
+            # Wire Agent Broker into GoalDecomposer (for delegation-aware planning)
+            _broker = _agent_broker if '_agent_broker' in locals() else None
+            if _broker:
+                goal_decomposer.agent_broker = _broker
+
             _task_runner = TaskRunner(
                 task_queue=task_queue,
                 goal_decomposer=goal_decomposer,
@@ -599,6 +610,7 @@ Models: Claude Opus/Sonnet/Haiku + SmolLM2 (local fallback)"""
                 template_library=_template_library,
                 owner_whatsapp_number=_owner_wa,
                 episodic_memory=episodic_memory,
+                agent_broker=_broker,
             )
             # Wire CriticAgent into ConversationManager for inline content reflection
             conversation_manager.critic = _critic

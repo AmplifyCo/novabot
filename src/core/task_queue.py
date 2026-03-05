@@ -31,6 +31,9 @@ class Subtask:
     verification_criteria: str = ""       # How to confirm this step actually succeeded
     reversible: bool = True               # False = cannot be undone (send email, post tweet, delete)
     depends_on: List[int] = field(default_factory=list)  # 0-indexed step indices this must wait for
+    execution_mode: str = "self"          # "self" | "delegate" — Eisenhower Matrix decision
+    delegate_to: str = ""                 # Agent name from known_agents.json (if execution_mode="delegate")
+    priority: str = "q2"                  # Eisenhower quadrant: q1 (do), q2 (schedule), q3 (delegate), q4 (eliminate)
 
 
 @dataclass
@@ -77,6 +80,9 @@ class Task:
                     "verification_criteria": st.verification_criteria,
                     "reversible": st.reversible,
                     "depends_on": st.depends_on,
+                    "execution_mode": st.execution_mode,
+                    "delegate_to": st.delegate_to,
+                    "priority": st.priority,
                 }
                 for st in self.subtasks
             ],
@@ -172,6 +178,9 @@ class TaskQueue:
                 "error": st.error,
                 "verification_criteria": st.verification_criteria,
                 "reversible": st.reversible,
+                "execution_mode": st.execution_mode,
+                "delegate_to": st.delegate_to,
+                "priority": st.priority,
             }
             for st in subtasks
         ])
@@ -202,6 +211,9 @@ class TaskQueue:
                 "error": st.error,
                 "verification_criteria": st.verification_criteria,
                 "reversible": st.reversible,
+                "execution_mode": st.execution_mode,
+                "delegate_to": st.delegate_to,
+                "priority": st.priority,
             }
             for st in task.subtasks
         ])
@@ -317,6 +329,9 @@ class TaskQueue:
                 verification_criteria=s.get("verification_criteria", ""),
                 reversible=s.get("reversible", True),
                 depends_on=s.get("depends_on", []),
+                execution_mode=s.get("execution_mode", "self"),
+                delegate_to=s.get("delegate_to", ""),
+                priority=s.get("priority", "q2"),
             )
             for s in subtask_dicts
         ]

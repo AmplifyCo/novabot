@@ -56,6 +56,7 @@ class TaskRunner:
         template_library=None,       # ReasoningTemplateLibrary (stores successful decompositions)
         owner_whatsapp_number: str = "",  # Fallback WhatsApp number from .env for task notifications
         episodic_memory=None,        # EpisodicMemory (for tool performance tracking)
+        agent_broker=None,           # AgentBroker (for delegating subtasks to external agents)
     ):
         self.task_queue = task_queue
         self.goal_decomposer = goal_decomposer
@@ -67,6 +68,7 @@ class TaskRunner:
         self.template_library = template_library
         self.owner_whatsapp_number = owner_whatsapp_number
         self.episodic_memory = episodic_memory
+        self.agent_broker = agent_broker
         self._running = False
         self._current_task_id: Optional[str] = None
         Path("./data/tasks").mkdir(parents=True, exist_ok=True)
@@ -463,7 +465,37 @@ class TaskRunner:
         return await asyncio.gather(*coros, return_exceptions=False)
 
     async def _execute_subtask(self, task: Task, subtask, idx: int, prior_results: list) -> str:
-        """Execute a single subtask via agent.run() and return the result string."""
+        """Execute a single subtask via agent.run() and return the result string.
+
+        If execution_mode is 'delegate' and an AgentBroker is available, delegates
+        to an external agent first. Falls back to self-execute on failure (CXO style).
+        """
+        # ── Delegation branch (Eisenhower Q3/Q4) ─────────────────────────────
+        if getattr(subtask, 'execution_mode', 'self') == 'delegate' and self.agent_broker:
+            delegate_to = getattr(subtask, 'delegate_to', '')
+            if delegate_to:
+                try:
+                    agent_config = self.agent_broker._agents.get(delegate_to)
+                    if agent_config and agent_config.get("enabled", True):
+                        logger.info(f"Task {task.id}: delegating step {idx+1} to '{delegate_to}'")
+                        result = await self.agent_broker.delegate(
+                            agent_config={**agent_config, "_name": delegate_to},
+                            task_text=subtask.description,
+                            context_id=task.id,
+                        )
+                        return result or "Delegated step completed (no output)"
+                    else:
+                        logger.warning(f"Agent '{delegate_to}' not found/disabled, falling back to self-execute")
+                except Exception as e:
+                    logger.warning(f"Delegation to '{delegate_to}' failed: {e} — trying self-execute")
+                    # CXO fallback: check if Nova has the required tools
+                    if subtask.tool_hints and not any(
+                        t in self.agent.tools.tools for t in subtask.tool_hints
+                    ):
+                        return f"ERROR: Delegated to {delegate_to} (failed: {e}). Nova lacks tools for this step."
+                    logger.info(f"Nova has the tools — self-executing step {idx+1} instead")
+
+        # ── Self-execute path (existing) ──────────────────────────────────────
         # Build an enriched subtask prompt that includes prior results as context
         context = ""
         if prior_results:
