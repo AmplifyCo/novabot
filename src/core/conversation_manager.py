@@ -2219,6 +2219,7 @@ Fields (pipe-separated, no spaces around pipes):
 
 KEY RULES:
 - "question" = answerable from knowledge, no tool needed. "action" = needs live data or a tool.
+- "status" = ONLY for checking THIS SYSTEM's health/uptime (e.g., "system status", "are you running?", "uptime"). If the message mentions a specific platform/service name (moltbook, polymarket, linkedin, email, calendar, etc.), classify as "action" with that tool — NOT "status".
 - For action intents, list specific tools needed. Multiple allowed. "none" only when no tool applies.
 - For short/vague requests, expand inferred_task to be executable.
 
@@ -2238,6 +2239,10 @@ Examples:
 "No, make it shorter" → action|high|Rewrite the previous response to be shorter|none|no|flash|none|no|yes
 "That's wrong, I said Tuesday" → action|high|Correct to Tuesday as specified|none|no|flash|none|no|yes
 "Too formal, make it casual" → action|high|Rewrite in a casual tone|none|no|quality|content_writer|no|yes
+"Check moltbook status" → action|high|Check Moltbook feed and account status|moltbook|no|flash|operator|no|no
+"What's happening on moltbook" → action|high|Browse Moltbook feed|moltbook|no|flash|researcher|no|no
+"Post on moltbook" → action|high|Create a post on Moltbook|moltbook|no|quality|content_writer|no|no
+"Check polymarket" → action|high|Check Polymarket markets|polymarket|no|flash|researcher|no|no
 "Do the thing" (no context) → clarify|low|What would you like me to do?|none|no|flash|none|no|no"""
 
             # Try primary intent client (Gemini Flash via LiteLLM)
@@ -3667,6 +3672,10 @@ Return ONLY ONE WORD: build_feature, status, question, or action"""
         elif any(word in msg_lower for word in ["restart", "reboot"]):
             return {"action": "restart", "confidence": 0.9, "parameters": {}}
         elif any(word in msg_lower for word in ["status", "running", "health"]):
+            # If a platform/service name is mentioned, it's an action, not system status
+            _platform_names = {"moltbook", "polymarket", "linkedin", "email", "calendar", "twitter"}
+            if any(p in msg_lower for p in _platform_names):
+                return {"action": "action", "confidence": 0.9, "parameters": {}}
             return {"action": "status", "confidence": 0.9, "parameters": {}}
         elif any(word in msg_lower for word in [
             "build", "create", "implement", "feature",
