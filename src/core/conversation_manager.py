@@ -1750,7 +1750,7 @@ RULES:
                     "('Since you prefer...', 'You mentioned...'). Never fabricate."
                 )
                 if len(brain_text) > 4000:
-                    brain_text = brain_text[:4000] + "\n[context truncated]"
+                    brain_text = await self._compress_turn_text(brain_text, 4000)
                 system_prompt += "\n\n" + brain_text
 
             # Inject tone adaptation from current message
@@ -2047,19 +2047,21 @@ User says "good morning" → none"""
         if self.gemini_client and self.gemini_client.enabled:
             try:
                 prompt = (
-                    f"Summarize the following in 1-2 sentences, preserving all key facts, "
-                    f"names, numbers, and decisions:\n\n{text}"
+                    f"Compress the following into a concise version. "
+                    f"Preserve ALL key facts, names, numbers, URLs, decisions, "
+                    f"and action items — drop only filler words and redundancy. "
+                    f"Do NOT omit any specific detail:\n\n{text}"
                 )
                 resp = await self.gemini_client.create_message(
                     model="gemini/gemini-2.0-flash",
                     messages=[{"role": "user", "content": prompt}],
-                    max_tokens=120,
+                    max_tokens=250,
                 )
                 summary = resp.get("content", "").strip() if isinstance(resp, dict) else str(resp).strip()
                 if summary:
-                    return f"[summary] {summary}"
+                    return f"[compacted] {summary}"
             except Exception as e:
-                logger.debug(f"Turn summarization failed, using truncation: {e}")
+                logger.debug(f"Turn compaction failed, using truncation: {e}")
         # Fallback: truncate
         return text[:limit] + "…"
 
@@ -2086,10 +2088,10 @@ User says "good morning" → none"""
                 if not content:
                     continue
                 if role == "user":
-                    user_text = content[:500] + "…" if len(content) > 500 else content
+                    user_text = await self._compress_turn_text(content, 500)
                     history_lines.append(f"User: {user_text}")
                 elif role == "assistant":
-                    bot_text = content[:1200] + "…" if len(content) > 1200 else content
+                    bot_text = await self._compress_turn_text(content, 1200)
                     history_lines.append(f"{self.bot_name}: {bot_text}")
             if history_lines:
                 return "\n".join(history_lines)
@@ -2104,8 +2106,9 @@ User says "good morning" → none"""
                 user_msg = turn.get("user_message", "")
                 bot_msg = turn.get("assistant_response", "")
                 if user_msg:
-                    user_text = user_msg[:500] + "…" if len(user_msg) > 500 else user_msg
-                    history_lines.append(f"User: {user_text}")
+                    if "user_compressed" not in turn:
+                        turn["user_compressed"] = await self._compress_turn_text(user_msg, 500)
+                    history_lines.append(f"User: {turn['user_compressed']}")
                 if bot_msg:
                     if "bot_compressed" not in turn:
                         turn["bot_compressed"] = await self._compress_turn_text(bot_msg, 1200)
@@ -2132,8 +2135,7 @@ User says "good morning" → none"""
                 user_msg = turn.get("user_message", "")
                 bot_msg = turn.get("assistant_response", "")
                 if user_msg:
-                    user_text = user_msg[:500] + "…" if len(user_msg) > 500 else user_msg
-                    history_lines.append(f"User: {user_text}")
+                    history_lines.append(f"User: {await self._compress_turn_text(user_msg, 500)}")
                 if bot_msg:
                     history_lines.append(f"{self.bot_name}: {await self._compress_turn_text(bot_msg, 1200)}")
 
