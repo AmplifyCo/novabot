@@ -445,6 +445,13 @@ Models: Claude Opus/Sonnet/Haiku + SmolLM2 (local fallback)"""
             agent.tools._plugin_loader.set_credential_store(credential_store)
             logger.info(f"🔑 Credential store loaded ({len(credential_store.list_keys())} keys)")
 
+            # Re-discover plugins now that credential store is available
+            # (initial load_all() in ToolRegistry.__init__ runs before credentials are wired)
+            if credential_store.list_keys():
+                new, reloaded, errors = agent.tools._plugin_loader.reload_all(agent.tools)
+                if new:
+                    logger.info(f"🔌 Loaded {new} plugin(s) using credential store")
+
             # Skill Acquisition (4A) — learn new tools from .md API specs
             from src.core.brain.skill_learner import SkillLearner
             _gemini_for_skills = gemini_client if 'gemini_client' in locals() else None
