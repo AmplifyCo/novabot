@@ -18,15 +18,35 @@ SAFE_SETTINGS = {
 SETTINGS_FILE = Path("data/settings.json")
 
 
+# Default settings seeded on first run
+_DEFAULT_SETTINGS = {
+    "bot_name": "Nova",
+    "owner_name": "User",
+    "log_level": "INFO",
+    "user_timezone": "America/Los_Angeles",
+    "user_location": "",
+    "default_model": "gemini/gemini-2.0-flash",
+    "subagent_model": "gemini/gemini-2.0-flash",
+    "chat_model": "gemini/gemini-2.0-flash",
+    "intent_model": "gemini/gemini-2.0-flash",
+    "max_iterations": 50,
+    "timeout_seconds": 300,
+    "auto_commit": True,
+    "self_build_mode": False,
+    "dashboard_port": 18789,
+}
+
+
 def load_settings() -> dict:
-    """Load safe settings from data/settings.json."""
-    if SETTINGS_FILE.exists():
-        try:
-            with open(SETTINGS_FILE, 'r') as f:
-                return json.load(f)
-        except (json.JSONDecodeError, IOError):
-            return {}
-    return {}
+    """Load safe settings from data/settings.json. Seeds defaults on first run."""
+    if not SETTINGS_FILE.exists():
+        # First run — seed with defaults so dashboard has something to show
+        save_settings(_DEFAULT_SETTINGS)
+    try:
+        with open(SETTINGS_FILE, 'r') as f:
+            return json.load(f)
+    except (json.JSONDecodeError, IOError):
+        return {}
 
 
 def save_settings(settings: dict) -> None:
