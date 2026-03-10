@@ -620,7 +620,7 @@ class Dashboard:
 
                     try:
                         response = await self._conversation_manager.process_message(
-                            user_message=msg,
+                            message=msg,
                             channel="dashboard",
                             user_id="owner",
                             chat_id=self._owner_chat_id or "dashboard",
