@@ -623,7 +623,6 @@ class Dashboard:
                             message=msg,
                             channel="dashboard",
                             user_id="owner",
-                            chat_id=self._owner_chat_id or "dashboard",
                         )
                         reply = response if isinstance(response, str) else str(response)
                     except Exception as e:
