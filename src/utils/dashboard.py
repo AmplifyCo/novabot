@@ -1390,7 +1390,8 @@ sudo systemctl restart novabot</pre>
         <div class="setting-row"><span class="setting-label">Log Level</span>
           <select class="setting-select" id="set-log_level"><option>DEBUG</option><option>INFO</option><option>WARNING</option><option>ERROR</option></select>
         </div>
-        <div class="setting-row"><span class="setting-label">Timezone</span><input class="setting-input" id="set-user_timezone" type="text" placeholder="US/Pacific"></div>
+        <div class="setting-row"><span class="setting-label">Timezone</span><input class="setting-input" id="set-user_timezone" type="text" placeholder="America/Los_Angeles"></div>
+        <div class="setting-row"><span class="setting-label">Location</span><input class="setting-input" id="set-user_location" type="text" placeholder="Los Angeles, CA"></div>
         <div class="setting-row"><span class="setting-label">Auto Commit</span><input class="setting-input" id="set-auto_commit" type="checkbox"></div>
         <div class="setting-row"><span class="setting-label">Self Build Mode</span><input class="setting-input" id="set-self_build_mode" type="checkbox"></div>
       </div>

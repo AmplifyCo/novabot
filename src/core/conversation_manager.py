@@ -4017,7 +4017,11 @@ SECURITY OVERRIDE:
         from src.core.timezone import current_time_context, effective_tz
         time_context = current_time_context()
         tz = effective_tz()
-        base_prompt = f"{time_context}\n\nTIMEZONE: User's current timezone is {tz}. Default is US/Pacific (PST/PDT). Always interpret and display times in the current timezone.\n\n{base_prompt}"
+        # Include user's location from settings if available
+        from src.core.config import load_settings as _load_settings
+        _user_loc = _load_settings().get("user_location", "")
+        location_ctx = f"\nLOCATION: User is based in {_user_loc}. Use this as default for weather, local news, and location-based queries." if _user_loc else ""
+        base_prompt = f"{time_context}\n\nTIMEZONE: User's current timezone is {tz}. Default is US/Pacific (PST/PDT). Always interpret and display times in the current timezone.{location_ctx}\n\n{base_prompt}"
 
         # ADD BRAIN CONTEXT for continuity and knowledge
         # Uses channel for context isolation — each talent gets its own

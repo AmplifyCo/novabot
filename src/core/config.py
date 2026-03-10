@@ -12,7 +12,7 @@ SAFE_SETTINGS = {
     "bot_name", "owner_name", "log_level",
     "default_model", "subagent_model", "chat_model", "intent_model",
     "max_iterations", "timeout_seconds", "auto_commit",
-    "self_build_mode", "dashboard_port", "user_timezone",
+    "self_build_mode", "dashboard_port", "user_timezone", "user_location",
 }
 
 SETTINGS_FILE = Path("data/settings.json")
