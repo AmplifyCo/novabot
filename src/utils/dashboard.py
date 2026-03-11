@@ -51,6 +51,7 @@ class Dashboard:
         self._brain = None
         self._agent_card_builder = None
         self._a2a_handler = None
+        self._ws_voice_handler = None
 
         try:
             from fastapi import FastAPI
@@ -211,6 +212,11 @@ class Dashboard:
         """Wire self-healing monitor for health stats."""
         self._self_healing_monitor = monitor
         logger.info("Self-healing monitor wired to dashboard")
+
+    def set_ws_voice_handler(self, handler):
+        """Wire WebSocket voice handler for streaming voice sessions."""
+        self._ws_voice_handler = handler
+        logger.info("WebSocket voice handler wired to dashboard")
 
     # ── Stats helpers ──────────────────────────────────────────────────
 
@@ -638,6 +644,14 @@ class Dashboard:
             except WebSocketDisconnect:
                 logger.debug("Dashboard WebSocket client disconnected")
 
+        # ── WebSocket voice (streaming) ───────────────────────────────
+        @app.websocket("/ws/voice")
+        async def voice_websocket(websocket: WebSocket):
+            if not self._ws_voice_handler:
+                await websocket.close(code=1013, reason="Voice handler not configured")
+                return
+            await self._ws_voice_handler.handle(websocket)
+
         # ── Health check ──────────────────────────────────────────────
         @app.get("/health")
         async def health():
@@ -773,6 +787,221 @@ class Dashboard:
             except Exception as e:
                 logger.error(f"/nova/chat error: {e}", exc_info=True)
                 return self.JSONResponse({"error": "Internal error"}, status_code=500)
+
+        # ── Voice API (edge device endpoints) ────────────────────────
+        # These let a thin voice client (Raspberry Pi) work with just NOVA_API_KEY.
+        # STT + TTS happen server-side — no OpenAI/ElevenLabs keys on the device.
+
+        def _voice_auth(request: Request) -> bool:
+            """Validate Bearer token for voice endpoints (same key as /nova/chat)."""
+            api_key = getattr(self, "_nova_api_key", "") or ""
+            if not api_key:
+                return False
+            auth = request.headers.get("Authorization", "")
+            token = auth[len("Bearer "):] if auth.startswith("Bearer ") else ""
+            return bool(token and hmac.compare_digest(token, api_key))
+
+        async def _gemini_stt(audio_bytes: bytes, filename: str = "audio.wav") -> str:
+            """Transcribe audio using Gemini Flash (multimodal — no extra API key)."""
+            import base64
+            import litellm
+
+            # Determine MIME type from extension
+            ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else "wav"
+            mime_map = {"wav": "audio/wav", "mp3": "audio/mpeg", "webm": "audio/webm",
+                        "ogg": "audio/ogg", "m4a": "audio/mp4", "flac": "audio/flac"}
+            mime = mime_map.get(ext, "audio/wav")
+
+            b64 = base64.b64encode(audio_bytes).decode("utf-8")
+            messages = [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": f"data:{mime};base64,{b64}"},
+                        },
+                        {
+                            "type": "text",
+                            "text": "Transcribe this audio exactly as spoken. Return ONLY the transcribed text, nothing else. No quotes, no labels, no prefixes.",
+                        },
+                    ],
+                }
+            ]
+
+            resp = await litellm.acompletion(
+                model="gemini/gemini-2.0-flash",
+                messages=messages,
+                max_tokens=500,
+                temperature=0.0,
+            )
+            return resp.choices[0].message.content.strip()
+
+        @app.post("/nova/voice/stt")
+        async def nova_voice_stt(request: Request):
+            """Transcribe audio using server-side Gemini Flash.
+
+            Request: multipart/form-data with 'audio' file (WAV/MP3/WebM)
+            Response: {"text": "transcribed text"}
+            """
+            if not _voice_auth(request):
+                return self.JSONResponse({"error": "Unauthorized"}, status_code=401)
+
+            try:
+                form = await request.form()
+                audio_file = form.get("audio")
+                if not audio_file:
+                    return self.JSONResponse({"error": "'audio' file required"}, status_code=400)
+
+                audio_bytes = await audio_file.read()
+                if len(audio_bytes) < 100:
+                    return self.JSONResponse({"error": "Audio too short"}, status_code=400)
+
+                text = await _gemini_stt(audio_bytes, audio_file.filename or "audio.wav")
+                return self.JSONResponse({"text": text})
+
+            except Exception as e:
+                logger.error(f"/nova/voice/stt error: {e}", exc_info=True)
+                return self.JSONResponse({"error": str(e)[:200]}, status_code=500)
+
+        @app.post("/nova/voice/tts")
+        async def nova_voice_tts(request: Request):
+            """Generate speech audio from text using server-side ElevenLabs.
+
+            Request: {"text": "Hello world"}
+            Response: audio/mpeg stream (MP3)
+            """
+            if not _voice_auth(request):
+                return self.JSONResponse({"error": "Unauthorized"}, status_code=401)
+
+            try:
+                body = await request.json()
+            except Exception:
+                return self.JSONResponse({"error": "Invalid JSON"}, status_code=400)
+
+            text = (body.get("text") or "").strip()
+            if not text:
+                return self.JSONResponse({"error": "'text' required"}, status_code=400)
+
+            el_key = os.getenv("ELEVENLABS_API_KEY", "")
+            el_voice = os.getenv("ELEVENLABS_VOICE_ID", "EXAVITQu4vr4xnSDxMaL")
+            if not el_key:
+                return self.JSONResponse({"error": "ELEVENLABS_API_KEY not configured"}, status_code=503)
+
+            try:
+                import httpx
+                async with httpx.AsyncClient(timeout=30) as hc:
+                    resp = await hc.post(
+                        f"https://api.elevenlabs.io/v1/text-to-speech/{el_voice}/stream",
+                        headers={"xi-api-key": el_key, "Content-Type": "application/json"},
+                        json={
+                            "text": text,
+                            "model_id": "eleven_multilingual_v2",
+                            "voice_settings": {"stability": 0.5, "similarity_boost": 0.75, "style": 0.4},
+                        },
+                    )
+                    if resp.status_code != 200:
+                        return self.JSONResponse({"error": f"ElevenLabs {resp.status_code}"}, status_code=502)
+
+                    from fastapi.responses import Response
+                    return Response(content=resp.content, media_type="audio/mpeg")
+
+            except Exception as e:
+                logger.error(f"/nova/voice/tts error: {e}", exc_info=True)
+                return self.JSONResponse({"error": str(e)[:200]}, status_code=500)
+
+        @app.post("/nova/voice")
+        async def nova_voice_full(request: Request):
+            """Full voice round-trip: audio in → STT → Nova → TTS → audio out.
+
+            Request: multipart/form-data with 'audio' file (WAV)
+            Response: audio/mpeg (Nova's spoken response)
+
+            Headers:
+              Authorization: Bearer <NOVA_API_KEY>
+              X-Nova-Text-Only: true  (optional — returns JSON instead of audio)
+            """
+            if not _voice_auth(request):
+                return self.JSONResponse({"error": "Unauthorized"}, status_code=401)
+
+            text_only = request.headers.get("X-Nova-Text-Only", "").lower() == "true"
+
+            # Step 1: STT (Gemini Flash — no extra API key needed)
+            try:
+                form = await request.form()
+                audio_file = form.get("audio")
+                if not audio_file:
+                    return self.JSONResponse({"error": "'audio' file required"}, status_code=400)
+
+                audio_bytes = await audio_file.read()
+                if len(audio_bytes) < 100:
+                    return self.JSONResponse({"error": "Audio too short"}, status_code=400)
+
+                user_text = await _gemini_stt(audio_bytes, audio_file.filename or "audio.wav")
+                if not user_text:
+                    return self.JSONResponse({"error": "Could not transcribe audio"}, status_code=400)
+
+                logger.info(f"Voice STT: {user_text}")
+
+            except Exception as e:
+                logger.error(f"Voice STT failed: {e}", exc_info=True)
+                return self.JSONResponse({"error": f"STT failed: {e}"}, status_code=500)
+
+            # Step 2: Nova
+            if not self._conversation_manager:
+                return self.JSONResponse({"error": "Not ready"}, status_code=503)
+
+            try:
+                response_text = await self._conversation_manager.process_message(
+                    message=user_text,
+                    channel="voice_client",
+                    user_id="owner",
+                )
+                logger.info(f"Voice response: {response_text[:100]}")
+            except Exception as e:
+                logger.error(f"Voice chat failed: {e}", exc_info=True)
+                return self.JSONResponse({"error": f"Chat failed: {e}"}, status_code=500)
+
+            # If text-only requested, skip TTS
+            if text_only:
+                return self.JSONResponse({"user_text": user_text, "response": response_text})
+
+            # Step 3: TTS
+            el_key = os.getenv("ELEVENLABS_API_KEY", "")
+            el_voice = os.getenv("ELEVENLABS_VOICE_ID", "EXAVITQu4vr4xnSDxMaL")
+            if not el_key:
+                # No TTS available — return text
+                return self.JSONResponse({"user_text": user_text, "response": response_text})
+
+            try:
+                import httpx
+                async with httpx.AsyncClient(timeout=30) as hc:
+                    tts_resp = await hc.post(
+                        f"https://api.elevenlabs.io/v1/text-to-speech/{el_voice}/stream",
+                        headers={"xi-api-key": el_key, "Content-Type": "application/json"},
+                        json={
+                            "text": response_text,
+                            "model_id": "eleven_multilingual_v2",
+                            "voice_settings": {"stability": 0.5, "similarity_boost": 0.75, "style": 0.4},
+                        },
+                    )
+                    if tts_resp.status_code == 200:
+                        from fastapi.responses import Response
+                        return Response(
+                            content=tts_resp.content,
+                            media_type="audio/mpeg",
+                            headers={
+                                "X-Nova-User-Text": user_text[:200],
+                                "X-Nova-Response-Text": response_text[:500],
+                            },
+                        )
+
+                # TTS failed — return text
+                return self.JSONResponse({"user_text": user_text, "response": response_text})
+
+            except Exception as e:
+                logger.error(f"Voice TTS failed: {e}", exc_info=True)
+                return self.JSONResponse({"user_text": user_text, "response": response_text})
 
         # ── Audio file serving ────────────────────────────────────────
         @app.get("/audio/{filename}")

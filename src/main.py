@@ -554,6 +554,19 @@ Models: Claude Opus/Sonnet/Haiku + SmolLM2 (local fallback)"""
         if dashboard.enabled and telegram.enabled:
             dashboard.set_telegram_notifier(telegram)
 
+        # WebSocket voice handler (streaming voice sessions)
+        if dashboard.enabled and config.nova_api_key:
+            try:
+                from src.voice.ws_voice_handler import WSVoiceHandler
+                _ws_voice = WSVoiceHandler(
+                    conversation_manager=conversation_manager,
+                    nova_api_key=config.nova_api_key,
+                )
+                dashboard.set_ws_voice_handler(_ws_voice)
+                logger.info("🎙️ WebSocket voice handler wired")
+            except Exception as e:
+                logger.warning(f"WebSocket voice handler failed: {e}")
+
         # A2A Protocol (Agent-to-Agent) — agent card + JSON-RPC endpoint
         if dashboard.enabled and 'task_queue' in locals():
             try:
